@@ -2,10 +2,10 @@ name: Despliegue de API Challenge en Azure
 
 # DISPARADORES (Requisitos 4, 7, 11)
 on:
-  # 1. Automático y en ramas (master/main despliega a prod)
+  # 1. Automático y en ramas (master despliega a prod)
   push:
     branches:
-      - master  # Rama 'master' (o main) siempre despliega a producción
+      - master  # Tu rama de producción
   
   # 2. En Pull Requests (para stages de Test)
   pull_request:
@@ -45,17 +45,20 @@ jobs:
           /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
 
     - name: 5. Restaurar Dependencias (Req 5)
-      # Ejecuta 'dotnet restore' sobre tu archivo de solución
-      run: dotnet restore Devops.Api.sln
+      # --- CORREGIDO ---
+      # Añadida la ruta correcta al archivo .sln
+      run: dotnet restore Devops.Api/Devops.Api.sln
 
     - name: 6. Build (Req 6)
-      run: dotnet build Devops.Api.sln --no-restore -c Release
+      # --- CORREGIDO ---
+      # Añadida la ruta correcta al archivo .sln
+      run: dotnet build Devops.Api/Devops.Api.sln --no-restore -c Release
 
     - name: 7. Pruebas (Req 6 y 8)
-      # Ejecuta los tests y genera un reporte de cobertura
-      # Asume que tienes un proyecto de tests en tu solución
+      # --- CORREGIDO ---
+      # Añadida la ruta correcta al archivo .sln
       run: >
-        dotnet test Devops.Api.sln --no-build -c Release \
+        dotnet test Devops.Api/Devops.Api.sln --no-build -c Release \
         /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
     - name: 8. Finalizar Análisis Estático
@@ -65,25 +68,64 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 9. Login en Azure Container Registry (ACR)
-      if: github.ref == 'refs/heads/main' 
+      # Se ejecuta solo en push a 'master'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/login-action@v3
       with:
-        registry: tu-acr.azurecr.io # Reemplaza con tu ACR
+        # ⬇️ REEMPLAZA CON TU SERVIDOR DE ACR
+        registry: challenge.azurecr.io 
         username: ${{ secrets.ACR_USERNAME }}
         password: ${{ secrets.ACR_PASSWORD }}
 
     - name: 10. Build y Push de imagen Docker (Req 1)
-      if: github.ref == 'refs/heads/main'
+      # Se ejecuta solo en push a 'master'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/build-push-action@v5
       with:
-        # CONTEXTO: La raíz del repo ('.')
-        # Esto es correcto porque tu Dockerfile hace 'COPY Devops.Api/...'
         context: .
-        
-        # ARCHIVO: La ruta a tu Dockerfile
         file: ./Devops.Api/Dockerfile
-        
         push: true
         tags: |
           tu-acr.azurecr.io/challenge:${{ github.sha }}
           tu-acr.azurecr.io/challenge:latest
+          
+  # ETAPA 2: DESPLIEGUE A PRODUCCIÓN
+  # (Cumple Requisito 7: 'master' despliega a prod)
+  deploy-to-prod:
+    needs: build-and-test # Depende de la etapa anterior
+    runs-on: ubuntu-latest
+    
+    # Solo se ejecuta si el trigger es un push a 'master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    
+    environment:
+      name: production # Define un entorno de GitHub
+      url: ${{ steps.deploy.outputs.url }} # URL de la app
+
+    steps:
+    - name: 1. Checkout del código (para Bicep/IaC)
+      uses: actions/checkout@v4
+
+    - name: 2. Login en Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: 3. Desplegar Infraestructura (IaC) y Actualizar App
+      id: deploy
+      uses: azure/arm-deploy@v1
+      with:
+        # ⬇️ REEMPLAZA CON TU ID DE SUBSCRIPCIÓN (si no está en AZURE_CREDENTIALS)
+        # subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        
+        # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS
+        resourceGroupName: tu-rg-produccion
+        
+        # ⬇️ ASEGÚRATE QUE ESTA RUTA A TU BICEP ES CORRECTA
+        # Si no usas IaC aún, comenta este paso
+        template: ./infra/main.bicep 
+        
+        # ⬇️ PARÁMETROS PARA TU BICEP
+        parameters: |
+          imageName=tu-acr.azurecr.io/challenge:${{ github.sha }}
+          # ...aquí van otros parámetros que necesite tu Bicep
