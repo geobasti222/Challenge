@@ -7,7 +7,7 @@ using Microsoft.Extensions.Configuration;
 using System.Collections.Generic;
 using Microsoft.AspNetCore.Http;
 
-namespace DevOps.Api.Tests
+namespace Devops.Api.Tests
 {
     public class DevOpsControllerTests
     {
