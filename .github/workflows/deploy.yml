@@ -94,7 +94,7 @@ jobs:
       uses: azure/arm-deploy@v1
       with:
         # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS REAL
-        resourceGroupName: tu-rg-produccion
+        resourceGroupName: Challenge
         template: ./infra/main.bicep 
         parameters: |
           # ⬇️ REEMPLAZA CON TU ACR REAL
