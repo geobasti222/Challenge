@@ -81,39 +81,39 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: 2. Registrar proveedor y crear/actualizar App Service
+      - name: 2. Configurar suscripción
         run: |
-          # Registrar el proveedor Microsoft.Web
-          echo "Registrando proveedor Microsoft.Web..."
-          az provider register --namespace Microsoft.Web --wait
+          echo "🎯 Usando suscripción: Azure subscription 1"
+          az account set --subscription "764ba8e4-f246-40b7-92ae-6178272c427d"
 
-          # Esperar a que el registro se complete
-          echo "Esperando registro de Microsoft.Web..."
-          while true; do
-            REGISTRATION_STATE=$(az provider show --namespace Microsoft.Web --query "registrationState" -o tsv)
-            if [ "$REGISTRATION_STATE" == "Registered" ]; then
-              echo "Microsoft.Web está registrado"
-              break
-            fi
-            echo "Estado del registro: $REGISTRATION_STATE - esperando 10 segundos..."
-            sleep 10
-          done
+      - name: 3. Verificar y crear infraestructura
+        run: |
+          echo "🔍 Verificando infraestructura..."
+          
+          # Verificar Resource Group
+          if ! az group show --name Challenge &>/dev/null; then
+            echo "📦 Creando Resource Group..."
+            az group create --name Challenge --location eastus --tags "project=challenge"
+          else
+            echo "✅ Resource Group existe"
+          fi
 
-          # Crear App Service Plan si no existe
+          # Verificar App Service Plan
           if ! az appservice plan show --name challenge-plan --resource-group Challenge &>/dev/null; then
-            echo "Creando App Service Plan..."
+            echo "📊 Creando App Service Plan..."
             az appservice plan create \
               --name challenge-plan \
               --resource-group Challenge \
               --sku B1 \
-              --is-linux
+              --is-linux \
+              --location eastus
           else
-            echo "App Service Plan ya existe"
+            echo "✅ App Service Plan existe"
           fi
 
-          # Crear Web App si no existe
+          # Verificar Web App
           if ! az webapp show --name challenge-app --resource-group Challenge &>/dev/null; then
-            echo "Creando Web App..."
+            echo "🌐 Creando Web App..."
             az webapp create \
               --name challenge-app \
               --resource-group Challenge \
@@ -121,11 +121,12 @@ jobs:
               --runtime "DOTNETCORE:8.0" \
               --deployment-container-image-name challenge.azurecr.io/challenge:latest
           else
-            echo "Web App ya existe"
+            echo "✅ Web App existe"
           fi
 
-          # Actualizar la imagen del contenedor
-          echo "Actualizando imagen del contenedor..."
+      - name: 4. Actualizar aplicación
+        run: |
+          echo "🚀 Actualizando aplicación con nueva versión..."
           az webapp config container set \
             --name challenge-app \
             --resource-group Challenge \
@@ -134,11 +135,13 @@ jobs:
             --docker-registry-server-user ${{ secrets.ACR_USERNAME }} \
             --docker-registry-server-password ${{ secrets.ACR_PASSWORD }}
 
-          echo "✅ Despliegue completado exitosamente"
+          echo "✅ Aplicación actualizada exitosamente"
 
-      - name: 3. Get App URL
+      - name: 5. Obtener URL y mostrar información
         id: output
         run: |
           APP_URL=$(az webapp show --name challenge-app --resource-group Challenge --query "defaultHostName" -o tsv)
           echo "app_url=https://$APP_URL" >> $GITHUB_OUTPUT
-          echo "🎉 Aplicación desplegada en: https://$APP_URL"
+          echo "🎉 ¡Despliegue completado!"
+          echo "🌐 URL de la aplicación: https://$APP_URL"
+          echo "🐳 Imagen desplegada: challenge.azurecr.io/challenge:${{ github.sha }}"
