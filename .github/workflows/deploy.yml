@@ -69,50 +69,51 @@ jobs:
           challenge.azurecr.io/challenge:latest
           
   deploy-to-prod:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    
-    environment:
-      name: production
-      url: ${{ steps.output.outputs.app_url }}
+          needs: build-and-test
+          runs-on: ubuntu-latest
+          if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+  
+          environment:
+            name: production
 
-    steps:
-    - name: 1. Checkout del código
-      uses: actions/checkout@v4
+          steps:
+            - name: 1. Login en Azure
+              uses: azure/login@v1
+              with:
+                creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: 2. Login en Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+            - name: 2. Crear o actualizar App Service
+              run: |
+                # Verificar si el App Service Plan existe, si no crearlo
+                if ! az appservice plan show --name challenge-plan --resource-group Challenge &>/dev/null; then
+                  az appservice plan create \
+                    --name challenge-plan \
+                    --resource-group Challenge \
+                    --sku B1 \
+                    --is-linux
+                fi
 
-    - name: 3. Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: "1.7.0"
+                # Verificar si el Web App existe, si no crearlo
+                if ! az webapp show --name challenge-app --resource-group Challenge &>/dev/null; then
+                  az webapp create \
+                    --name challenge-app \
+                    --resource-group Challenge \
+                    --plan challenge-plan \
+                    --runtime "DOTNETCORE:8.0" \
+                    --deployment-container-image-name challenge.azurecr.io/challenge:latest
+                fi
 
-    - name: 4. Terraform Init
-      id: init
-      run: terraform init
-      working-directory: ./terraform
+                # Actualizar la imagen
+                az webapp config container set \
+                  --name challenge-app \
+                  --resource-group Challenge \
+                  --docker-custom-image-name challenge.azurecr.io/challenge:${{ github.sha }} \
+                  --docker-registry-server-url https://challenge.azurecr.io \
+                  --docker-registry-server-user ${{ secrets.ACR_USERNAME }} \
+                  --docker-registry-server-password ${{ secrets.ACR_PASSWORD }}
 
-    - name: 5. Terraform Plan
-      id: plan
-      run: |
-        terraform plan \
-          -var="docker_tag=${{ github.sha }}" \
-          -var="acr_username=${{ secrets.ACR_USERNAME }}" \
-          -var="acr_password=${{ secrets.ACR_PASSWORD }}" \
-          -out=tfplan
-      working-directory: ./terraform
-
-    - name: 6. Terraform Apply
-      id: apply
-      run: terraform apply -auto-approve tfplan
-      working-directory: ./terraform
-
-    - name: 7. Get App URL
-      id: output
-      run: |
-        echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
-      working-directory: ./terraform
+            - name: 3. Get App URL
+              id: output
+              run: |
+                APP_URL=$(az webapp show --name challenge-app --resource-group Challenge --query "defaultHostName" -o tsv)
+                echo "app_url=https://$APP_URL" >> $GITHUB_OUTPUT
