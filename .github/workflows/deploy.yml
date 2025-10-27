@@ -44,10 +44,7 @@ jobs:
       run: dotnet build Challenge.sln --no-restore -c Release
 
     - name: 7. Pruebas (Req 6 y 8)
-      # --- CORREGIDO: Usa Challenge.sln ---
-      run: >
-        dotnet test Challenge.sln --no-build -c Release \
-        /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
+      run: dotnet test Challenge.sln --no-build -c Release /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
     - name: 8. Finalizar Análisis Estático
       run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
