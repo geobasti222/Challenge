@@ -2,21 +2,15 @@ name: Despliegue de API Challenge en Azure
 
 # DISPARADORES (Requisitos 4, 7, 11)
 on:
-  # 1. Automático y en ramas (master despliega a prod)
   push:
     branches:
-      - master  # Tu rama de producción
-  
-  # 2. En Pull Requests (para stages de Test)
+      - master
   pull_request:
     branches:
       - master
-      
-  # 3. Ejecución bajo demanda
   workflow_dispatch:
 
 jobs:
-  # ETAPA 1: BUILD, TEST y ANÁLISIS (VERSIÓN .NET)
   build-and-test:
     runs-on: ubuntu-latest
     
@@ -24,20 +18,17 @@ jobs:
     - name: 1. Checkout del código
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Necesario para SonarCloud
+        fetch-depth: 0
 
     - name: 2. Configurar .NET SDK 8.0
-      # Instala las herramientas de .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
 
-    - name: 3. Instalar SonarScanner (Análisis Estático)
-      # (Req 9) Instala la herramienta de Sonar para .NET
+    - name: 3. Instalar SonarScanner
       run: dotnet tool install --global dotnet-sonarscanner
 
     - name: 4. Iniciar Análisis Estático
-      # (Req 9) Inicia el escáner
       run: |
         dotnet sonarscanner begin /k:"geobasti222_Challenge" /o:"geobasti222" \
           /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
@@ -45,40 +36,34 @@ jobs:
           /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
 
     - name: 5. Restaurar Dependencias (Req 5)
-      # --- CORREGIDO ---
-      # El archivo .sln SÍ está en la raíz
-      run: dotnet restore Devops.Api.sln
+      # --- CORREGIDO: Usa Challenge.sln ---
+      run: dotnet restore Challenge.sln
 
     - name: 6. Build (Req 6)
-      # --- CORREGIDO ---
-      # El archivo .sln SÍ está en la raíz
-      run: dotnet build Devops.Api.sln --no-restore -c Release
+      # --- CORREGIDO: Usa Challenge.sln ---
+      run: dotnet build Challenge.sln --no-restore -c Release
 
     - name: 7. Pruebas (Req 6 y 8)
-      # --- CORREGIDO ---
-      # El archivo .sln SÍ está en la raíz
+      # --- CORREGIDO: Usa Challenge.sln ---
       run: >
-        dotnet test Devops.Api.sln --no-build -c Release \
+        dotnet test Challenge.sln --no-build -c Release \
         /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
     - name: 8. Finalizar Análisis Estático
-      # (Req 9) Finaliza y envía los resultados a SonarCloud
       run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 9. Login en Azure Container Registry (ACR)
-      # Se ejecuta solo en push a 'master'
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/login-action@v3
       with:
-        # ⬇️ REEMPLAZA CON TU SERVIDOR DE ACR
+        # ⬇️ REEMPLAZA CON TU SERVIDOR DE ACR REAL
         registry: challenge.azurecr.io 
         username: ${{ secrets.ACR_USERNAME }}
         password: ${{ secrets.ACR_PASSWORD }}
 
     - name: 10. Build y Push de imagen Docker (Req 1)
-      # Se ejecuta solo en push a 'master'
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/build-push-action@v5
       with:
@@ -86,24 +71,21 @@ jobs:
         file: ./Devops.Api/Dockerfile
         push: true
         tags: |
-          tu-acr.azurecr.io/challenge:${{ github.sha }}
-          tu-acr.azurecr.io/challenge:latest
+          # ⬇️ REEMPLAZA CON TU ACR REAL
+          challenge.azurecr.io/challenge:${{ github.sha }}
+          challenge.azurecr.io/challenge:latest
           
-  # ETAPA 2: DESPLIEGUE A PRODUCCIÓN
-  # (Cumple Requisito 7: 'master' despliega a prod)
   deploy-to-prod:
-    needs: build-and-test # Depende de la etapa anterior
+    needs: build-and-test
     runs-on: ubuntu-latest
-    
-    # Solo se ejecuta si el trigger es un push a 'master'
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     
     environment:
-      name: production # Define un entorno de GitHub
-      url: ${{ steps.deploy.outputs.url }} # URL de la app
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
 
     steps:
-    - name: 1. Checkout del código (para Bicep/IaC)
+    - name: 1. Checkout del código
       uses: actions/checkout@v4
 
     - name: 2. Login en Azure
@@ -111,18 +93,13 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: 3. Desplegar Infraestructura (IaC) y Actualizar App
+    - name: 3. Desplegar Infraestructura
       id: deploy
       uses: azure/arm-deploy@v1
       with:
-        # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS
+        # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS REAL
         resourceGroupName: tu-rg-produccion
-        
-        # ⬇️ ASEGÚRATE QUE ESTA RUTA A TU BICEP ES CORRECTA
-        # Si no usas IaC aún, comenta este paso
         template: ./infra/main.bicep 
-        
-        # ⬇️ PARÁMETROS PARA TU BICEP
         parameters: |
-          imageName=tu-acr.azurecr.io/challenge:${{ github.sha }}
-          # ...aquí van otros parámetros que necesite tu Bicep
+          # ⬇️ REEMPLAZA CON TU ACR REAL
+          imageName=challenge.azurecr.io/challenge:${{ github.sha }}
