@@ -35,15 +35,13 @@ jobs:
           /d:sonar.host.url="https://sonarcloud.io" \
           /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
 
-    - name: 5. Restaurar Dependencias (Req 5)
-      # --- CORREGIDO: Usa Challenge.sln ---
+    - name: 5. Restaurar Dependencias
       run: dotnet restore Challenge.sln
 
-    - name: 6. Build (Req 6)
-      # --- CORREGIDO: Usa Challenge.sln ---
+    - name: 6. Build
       run: dotnet build Challenge.sln --no-restore -c Release
 
-    - name: 7. Pruebas (Req 6 y 8)
+    - name: 7. Pruebas
       run: dotnet test Challenge.sln --no-build -c Release /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
     - name: 8. Finalizar Análisis Estático
@@ -55,12 +53,11 @@ jobs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/login-action@v3
       with:
-        # ⬇️ REEMPLAZA CON TU SERVIDOR DE ACR REAL
         registry: challenge.azurecr.io 
         username: ${{ secrets.ACR_USERNAME }}
         password: ${{ secrets.ACR_PASSWORD }}
 
-    - name: 10. Build y Push de imagen Docker (Req 1)
+    - name: 10. Build y Push de imagen Docker
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: docker/build-push-action@v5
       with:
@@ -78,7 +75,7 @@ jobs:
     
     environment:
       name: production
-      url: ${{ steps.deploy.outputs.url }}
+      url: ${{ steps.output.outputs.app_url }}
 
     steps:
     - name: 1. Checkout del código
@@ -89,13 +86,33 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: 3. Desplegar Infraestructura
-      id: deploy
-      uses: azure/arm-deploy@v1
+    - name: 3. Setup Terraform
+      uses: hashicorp/setup-terraform@v3
       with:
-        # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS REAL
-        resourceGroupName: Challenge
-        template: ./infra/main.bicep 
-        parameters: |
-          # ⬇️ REEMPLAZA CON TU ACR REAL
-          imageName=challenge.azurecr.io/challenge:${{ github.sha }}
+        terraform_version: "1.7.0"
+
+    - name: 4. Terraform Init
+      id: init
+      run: terraform init
+      working-directory: ./terraform
+
+    - name: 5. Terraform Plan
+      id: plan
+      run: |
+        terraform plan \
+          -var="docker_tag=${{ github.sha }}" \
+          -var="acr_username=${{ secrets.ACR_USERNAME }}" \
+          -var="acr_password=${{ secrets.ACR_PASSWORD }}" \
+          -out=tfplan
+      working-directory: ./terraform
+
+    - name: 6. Terraform Apply
+      id: apply
+      run: terraform apply -auto-approve tfplan
+      working-directory: ./terraform
+
+    - name: 7. Get App URL
+      id: output
+      run: |
+        echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
+      working-directory: ./terraform
