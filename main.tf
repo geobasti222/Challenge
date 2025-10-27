@@ -6,6 +6,9 @@ terraform {
       version = "~>3.0"
     }
   }
+
+  # ELIMINA completamente la sección backend o coméntala
+  # backend "azurerm" {}
 }
 
 provider "azurerm" {
