@@ -46,19 +46,19 @@ jobs:
 
     - name: 5. Restaurar Dependencias (Req 5)
       # --- CORREGIDO ---
-      # Añadida la ruta correcta al archivo .sln
-      run: dotnet restore Devops.Api/Devops.Api.sln
+      # El archivo .sln SÍ está en la raíz
+      run: dotnet restore Devops.Api.sln
 
     - name: 6. Build (Req 6)
       # --- CORREGIDO ---
-      # Añadida la ruta correcta al archivo .sln
-      run: dotnet build Devops.Api/Devops.Api.sln --no-restore -c Release
+      # El archivo .sln SÍ está en la raíz
+      run: dotnet build Devops.Api.sln --no-restore -c Release
 
     - name: 7. Pruebas (Req 6 y 8)
       # --- CORREGIDO ---
-      # Añadida la ruta correcta al archivo .sln
+      # El archivo .sln SÍ está en la raíz
       run: >
-        dotnet test Devops.Api/Devops.Api.sln --no-build -c Release \
+        dotnet test Devops.Api.sln --no-build -c Release \
         /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
     - name: 8. Finalizar Análisis Estático
@@ -115,9 +115,6 @@ jobs:
       id: deploy
       uses: azure/arm-deploy@v1
       with:
-        # ⬇️ REEMPLAZA CON TU ID DE SUBSCRIPCIÓN (si no está en AZURE_CREDENTIALS)
-        # subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        
         # ⬇️ REEMPLAZA CON TU GRUPO DE RECURSOS
         resourceGroupName: tu-rg-produccion
         
