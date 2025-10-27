@@ -16,8 +16,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ETAPA 1: BUILD, TEST y ANÁLISIS
-  # (Cumple Requisitos 5, 6, 8, 9)
+  # ETAPA 1: BUILD, TEST y ANÁLISIS (VERSIÓN .NET)
   build-and-test:
     runs-on: ubuntu-latest
     
@@ -27,77 +26,64 @@ jobs:
       with:
         fetch-depth: 0 # Necesario para SonarCloud
 
-    - name: 2. Configurar Java (JDK 17)
-      uses: actions/setup-java@v4
+    - name: 2. Configurar .NET SDK 8.0
+      # Instala las herramientas de .NET
+      uses: actions/setup-dotnet@v4
       with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: 'maven'
+        dotnet-version: '8.0.x'
 
-    - name: 3. Gestión de Dependencias y Pruebas (Req 5 y 8)
-      # 'package' ejecuta el 'test' de Maven automáticamente
-      run: mvn -B package --file pom.xml
+    - name: 3. Instalar SonarScanner (Análisis Estático)
+      # (Req 9) Instala la herramienta de Sonar para .NET
+      run: dotnet tool install --global dotnet-sonarscanner
 
-    - name: 4. Análisis Estático de Código (Req 9)
-      # Asume que usas SonarCloud (gratis para repos públicos)
-      # Necesitas el secreto SONAR_TOKEN
-      if: success() # Solo corre si los tests pasan
+    - name: 4. Iniciar Análisis Estático
+      # (Req 9) Inicia el escáner
+      run: |
+        dotnet sonarscanner begin /k:"geobasti222_Challenge" /o:"geobasti222" \
+          /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
+          /d:sonar.host.url="https://sonarcloud.io" \
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+
+    - name: 5. Restaurar Dependencias (Req 5)
+      # Ejecuta 'dotnet restore' sobre tu archivo de solución
+      run: dotnet restore Devops.Api.sln
+
+    - name: 6. Build (Req 6)
+      run: dotnet build Devops.Api.sln --no-restore -c Release
+
+    - name: 7. Pruebas (Req 6 y 8)
+      # Ejecuta los tests y genera un reporte de cobertura
+      # Asume que tienes un proyecto de tests en tu solución
       run: >
-        mvn -B verify sonar:sonar \
-          -Dsonar.projectKey=geobasti222_Challenge \
-          -Dsonar.organization=tu-org-sonar \
-          -Dsonar.host.url=https://sonarcloud.io \
-          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Requerido para PRs
+        dotnet test Devops.Api.sln --no-build -c Release \
+        /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
 
-    - name: 5. Login en Azure Container Registry (ACR)
-      if: github.ref == 'refs/heads/main' # Solo si es push a main
+    - name: 8. Finalizar Análisis Estático
+      # (Req 9) Finaliza y envía los resultados a SonarCloud
+      run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 9. Login en Azure Container Registry (ACR)
+      if: github.ref == 'refs/heads/main' 
       uses: docker/login-action@v3
       with:
         registry: tu-acr.azurecr.io # Reemplaza con tu ACR
         username: ${{ secrets.ACR_USERNAME }}
         password: ${{ secrets.ACR_PASSWORD }}
 
-    - name: 6. Build y Push de imagen Docker (Req 1)
+    - name: 10. Build y Push de imagen Docker (Req 1)
       if: github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v5
       with:
+        # CONTEXTO: La raíz del repo ('.')
+        # Esto es correcto porque tu Dockerfile hace 'COPY Devops.Api/...'
         context: .
+        
+        # ARCHIVO: La ruta a tu Dockerfile
+        file: ./Devops.Api/Dockerfile
+        
         push: true
         tags: |
           tu-acr.azurecr.io/challenge:${{ github.sha }}
           tu-acr.azurecr.io/challenge:latest
-          
-  # ETAPA 2: DESPLIEGUE A PRODUCCIÓN
-  # (Cumple Requisito 7: 'main' despliega a prod)
-  deploy-to-prod:
-    needs: build-and-test # Depende de la etapa anterior
-    runs-on: ubuntu-latest
-    
-    # Solo se ejecuta si el trigger es un push a 'main'
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    environment:
-      name: production # Define un entorno de GitHub
-      url: ${{ steps.deploy.outputs.url }} # URL de la app
-
-    steps:
-    - name: 1. Checkout del código (para Bicep)
-      uses: actions/checkout@v4
-
-    - name: 2. Login en Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-    - name: 3. Desplegar Infraestructura (IaC) y Actualizar App
-      id: deploy
-      uses: azure/arm-deploy@v1
-      with:
-        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        resourceGroupName: tu-rg-produccion
-        template: ./infra/main.bicep # Ruta a tu archivo Bicep
-        parameters: |
-          imageName=tu-acr.azurecr.io/challenge:${{ github.sha }}
-          # ...otros parámetros de Bicep
