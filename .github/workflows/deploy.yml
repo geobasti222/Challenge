@@ -98,13 +98,13 @@ jobs:
             echo "✅ Resource Group existe"
           fi
 
-          # Verificar App Service Plan
+          # Verificar App Service Plan - USANDO F1 (FREE) EN LUGAR DE B1
           if ! az appservice plan show --name challenge-plan --resource-group Challenge &>/dev/null; then
-            echo "📊 Creando App Service Plan..."
+            echo "📊 Creando App Service Plan (FREE F1)..."
             az appservice plan create \
               --name challenge-plan \
               --resource-group Challenge \
-              --sku B1 \
+              --sku F1 \
               --is-linux \
               --location eastus
           else
@@ -145,3 +145,4 @@ jobs:
           echo "🎉 ¡Despliegue completado!"
           echo "🌐 URL de la aplicación: https://$APP_URL"
           echo "🐳 Imagen desplegada: challenge.azurecr.io/challenge:${{ github.sha }}"
+          echo "💡 Plan: F1 (Free) - Sin costo"
