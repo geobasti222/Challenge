@@ -186,11 +186,11 @@ stages:
 # STAGE 3: DEPLOY TO PRODUCTION
 - stage: Deploy_Prod
   displayName: 'Deploy to Production'
-  dependsOn: Build_Test  # ← CORREGIDO: Cambiado de 'Test' a 'Build_Test'
+  dependsOn: Build_Test
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
   jobs:
   - deployment: Deploy_Production
-    displayName: 'Deploy to Production with Full Configuration'
+    displayName: 'Deploy to Production'
     pool:
       vmImage: $(vmImage)
     environment: 'Production'
@@ -199,17 +199,34 @@ stages:
         deploy:
           steps:
           - checkout: self
-          - download: current  # ← AGREGADO: Descargar artefactos
+          - download: current
             artifact: manifests
+
+          - task: AzureCLI@2
+            displayName: 'Configure ACR Access for AKS'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "=== CONFIGURANDO ACCESO ACR PARA AKS ==="
+                az aks update --resource-group $(aksResourceGroup) --name $(aksClusterName) --attach-acr challenge
+                echo "✅ AKS configurado para acceder al ACR"
 
           - task: Bash@3
             displayName: 'Update Production Image Tag'
             inputs:
               targetType: 'inline'
               script: |
-                # Actualizar tag en kustomization
-                sed -i "s|BUILD_TAG|$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
-                echo "✅ Image tag actualizado a: $(Build.BuildId)"
+                echo "=== ACTUALIZANDO TAG DE IMAGEN ==="
+                echo "Build ID: $(Build.BuildId)"
+                
+                # Convertir a string y reemplazar el placeholder
+                sed -i "s|BUILD_TAG_PLACEHOLDER|$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
+                
+                # Verificar el cambio
+                echo "✅ Kustomization actualizado:"
+                grep -A 2 -B 2 "newTag" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Production)'
@@ -223,12 +240,86 @@ stages:
                 
                 az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
                 
-                # Usar Kustomize para producción
+                # Verificar que la imagen existe en ACR
+                echo "=== VERIFICANDO IMAGEN EN ACR ==="
+                az acr repository show-tags --name challenge --repository devops-api --output table
+                
+                # Verificar el kustomization antes de aplicar
+                echo "=== VERIFICANDO KUSTOMIZATION ==="
+                cat $(Pipeline.Workspace)/manifests/production/kustomization.yaml
+                
+                echo "=== APLICANDO CONFIGURACIÓN ==="
                 kubectl apply -k $(Pipeline.Workspace)/manifests/production/
                 
-                # Verificar despliegue
-                kubectl rollout status deployment/devops-api -n $(aksNamespaceProd) --timeout=300s
+                echo "=== ESPERANDO DESPLIEGUE ==="
+                # Esperar inicial para descarga de imagen
+                sleep 45
                 
-                echo "✅ Producción desplegada con alta disponibilidad"
-                kubectl get pods -n $(aksNamespaceProd)
-                kubectl get hpa -n $(aksNamespaceProd) 2>/dev/null || echo "HPA no disponible"
+                # Verificar estado con timeout extendido
+                if kubectl rollout status deployment/devops-api -n devops-app-prod --timeout=600s; then
+                  echo "🎉 ✅ PRODUCCIÓN DESPLEGADA EXITOSAMENTE"
+                  echo "📊 Estado final:"
+                  kubectl get all -n devops-app-prod
+                  kubectl get hpa -n devops-app-prod
+                else
+                  echo "❌ FALLO EN EL DESPLIEGUE DE PRODUCCIÓN"
+                  echo "=== DETALLES DEL ERROR ==="
+                  kubectl describe deployment devops-api -n devops-app-prod
+                  kubectl describe pods -n devops-app-prod -l app=devops-api
+                  kubectl logs -n devops-app-prod -l app=devops-api --all-containers=true --tail=50
+                  exit 1
+                fi
+
+          - task: AzureCLI@2
+            displayName: 'Configure API Management'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "=== CONFIGURANDO API MANAGEMENT ==="
+                
+                # Obtener IP externa del servicio
+                echo "Obteniendo IP del servicio..."
+                kubectl get service devops-api-service -n devops-app-prod -o wide
+                
+                # Esperar a que la IP esté disponible
+                COUNTER=0
+                while [ $COUNTER -lt 12 ]; do
+                  SERVICE_IP=$(kubectl get service devops-api-service -n devops-app-prod -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+                  if [ -n "$SERVICE_IP" ]; then
+                    echo "✅ IP del servicio: $SERVICE_IP"
+                    break
+                  fi
+                  echo "Esperando IP del servicio... ($((COUNTER*30))s)"
+                  sleep 30
+                  COUNTER=$((COUNTER + 1))
+                done
+                
+                if [ -n "$SERVICE_IP" ]; then
+                  echo "Configurando API Management para: http://$SERVICE_IP"
+                  
+                  # Verificar si la API ya existe
+                  if az apim api show --resource-group $(apimResourceGroup) --service-name $(apimServiceName) --api-id 'devops-api-prod' &>/dev/null; then
+                    echo "✅ API ya existe, actualizando..."
+                    az apim api update \
+                      --resource-group $(apimResourceGroup) \
+                      --service-name $(apimServiceName) \
+                      --api-id 'devops-api-prod' \
+                      --service-url "http://$SERVICE_IP"
+                  else
+                    echo "📝 Creando nueva API..."
+                    az apim api create \
+                      --resource-group $(apimResourceGroup) \
+                      --service-name $(apimServiceName) \
+                      --api-id 'devops-api-prod' \
+                      --display-name 'DevOps API Production' \
+                      --path 'api' \
+                      --service-url "http://$SERVICE_IP" \
+                      --protocols https \
+                      --subscription-required true
+                  fi
+                  echo "✅ API Management configurado"
+                else
+                  echo "⚠️  No se pudo obtener IP del servicio, omitiendo API Management"
+                fi

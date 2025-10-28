@@ -29,9 +29,7 @@ patches:
       value:
       - name: ASPNETCORE_ENVIRONMENT
         value: "Production"
-      - name: LOG_LEVEL
-        value: "Information"
 
 images:
 - name: challenge.azurecr.io/devops-api
-  newTag: BUILD_TAG
+  newTag: v1.0.0  # Este será reemplazado vía línea de comandos
