@@ -31,9 +31,9 @@ variables:
   - name: dockerfilePath
     value: 'Devops.Api/Dockerfile'
   
-  # AKS Configuration - CAMBIAR a Azure Resource Manager Service Connection
+  # AKS Configuration
   - name: azureServiceConnection
-    value: 'MychallengeServiceConnection'  # ← USAR ESTA (tipo AzureRM)
+    value: 'MychallengeServiceConnection'
   - name: aksResourceGroup
     value: 'Challenge'
   - name: aksClusterName
@@ -120,7 +120,7 @@ stages:
 - stage: Deploy_Prod
   displayName: 'Deploy to AKS Production'
   dependsOn: Build_Test
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))  # ← Cambiar a 'master'
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
   jobs:
   - deployment: DeployAKS
     displayName: 'Deploy to AKS'
@@ -135,88 +135,67 @@ stages:
           - download: current
             artifact: manifests
 
-          - task: Kubernetes@1
-            displayName: 'Get AKS Credentials'
+          # DESPLIEGUE A AKS USANDO AZURE CLI (MÁS CONFIABLE)
+          - task: AzureCLI@2
+            displayName: 'Deploy to AKS using kubectl'
             inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              command: 'use'
-              useClusterAdmin: true
-
-          # Reemplazar tag de imagen en los manifiestos
-          - task: Bash@3
-            displayName: 'Update Image Tag in Manifests'
-            inputs:
-              targetType: 'inline'
-              script: |
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -e  # Exit on error
+                
+                echo "=== OBTENIENDO CREDENCIALES DE AKS ==="
+                az aks get-credentials \
+                  --resource-group $(aksResourceGroup) \
+                  --name $(aksClusterName) \
+                  --overwrite-existing
+                echo "✅ Credenciales de AKS configuradas"
+                
+                # Mostrar información del cluster
+                echo "=== INFORMACIÓN DEL CLUSTER ==="
+                kubectl cluster-info
+                kubectl get nodes
+                
+                echo "=== ACTUALIZANDO IMAGEN EN MANIFIESTO ==="
                 sed -i "s|challenge.azurecr.io/devops-api:latest|$(acrName)/$(imageName):$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/deployment.yaml
-                echo "Image tag updated to: $(acrName)/$(imageName):$(Build.BuildId)"
+                echo "✅ Imagen actualizada: $(acrName)/$(imageName):$(Build.BuildId)"
+                
+                echo "=== APLICANDO MANIFIESTOS ==="
+                kubectl apply -f $(Pipeline.Workspace)/manifests/namespace.yaml
+                echo "✅ Namespace creado"
+                
+                kubectl apply -f $(Pipeline.Workspace)/manifests/deployment.yaml
+                echo "✅ Deployment aplicado"
+                
+                kubectl apply -f $(Pipeline.Workspace)/manifests/service.yaml
+                echo "✅ Service creado"
+                
+                echo "=== VERIFICANDO DESPLIEGUE ==="
+                kubectl rollout status deployment/devops-api -n $(aksNamespace) --timeout=300s
+                echo "✅ Deployment completado exitosamente"
+                
+                echo "=== INFORMACIÓN FINAL ==="
+                kubectl get pods -n $(aksNamespace)
+                kubectl get service devops-api-service -n $(aksNamespace) -o wide
+                
+                echo ""
+                echo "🎉 DESPLIEGUE EXITOSO"
+                echo "📦 Aplicación: devops-api"
+                echo "🏷️  Imagen: $(acrName)/$(imageName):$(Build.BuildId)"
+                echo "📁 Namespace: $(aksNamespace)"
+                echo "🖥️  Cluster: $(aksClusterName)"
 
-          # Aplicar manifiestos en orden
-          - task: Kubernetes@1
-            displayName: 'Create Namespace'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              command: 'apply'
-              useConfigurationFile: true
-              configuration: '$(Pipeline.Workspace)/manifests/namespace.yaml'
-
-          - task: Kubernetes@1
-            displayName: 'Deploy Application'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              command: 'apply'
-              useConfigurationFile: true
-              configuration: '$(Pipeline.Workspace)/manifests/deployment.yaml'
-
-          - task: Kubernetes@1
-            displayName: 'Create Service'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              command: 'apply'
-              useConfigurationFile: true
-              configuration: '$(Pipeline.Workspace)/manifests/service.yaml'
-
-          # Verificaciones
-          - task: Kubernetes@1
-            displayName: 'Verify Deployment'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              namespace: $(aksNamespace)
-              command: 'rollout'
-              arguments: 'status deployment/devops-api'
-
-          - task: Kubernetes@1
-            displayName: 'Get Service External IP'
-            inputs:
-              connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
-              azureResourceGroup: $(aksResourceGroup)
-              kubernetesCluster: $(aksClusterName)
-              namespace: $(aksNamespace)
-              command: 'get'
-              arguments: 'service devops-api-service -o wide'
-
+          # HEALTH CHECK ADICIONAL
           - task: Bash@3
-            displayName: 'Health Check'
+            displayName: 'Final Health Check'
             inputs:
               targetType: 'inline'
               script: |
-                echo "Deployment completed successfully!"
-                echo "Application deployed to AKS cluster: $(aksClusterName)"
-                echo "Namespace: $(aksNamespace)"
-                echo "Image: $(acrName)/$(imageName):$(Build.BuildId)"
+                echo "=== RESUMEN DEL DESPLIEGUE ==="
+                echo "✅ Build completado: $(Build.BuildId)"
+                echo "✅ Imagen publicada en ACR"
+                echo "✅ Aplicación desplegada en AKS"
+                echo "✅ Todos los manifiestos aplicados"
+                echo ""
+                echo "La aplicación está lista en el cluster AKS"
