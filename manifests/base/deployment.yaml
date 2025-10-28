@@ -1,4 +1,4 @@
-apiVersion: apps/v1
+﻿apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: devops-api
@@ -16,15 +16,16 @@ spec:
         image: challenge.azurecr.io/devops-api:latest
         ports:
         - containerPort: 80
+        # CORREGIDO: Usar puerto 80 en los probes
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80  # ← Cambiado de 8080 a 80
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80  # ← Cambiado de 8080 a 80
           initialDelaySeconds: 5
           periodSeconds: 10
