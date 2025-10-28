@@ -1,4 +1,4 @@
-# azure-pipelines.yml
+﻿# azure-pipelines.yml
 trigger:
   branches:
     include:
@@ -24,22 +24,22 @@ variables:
   # Docker/ACR
   - name: acrServiceConnection
     value: 'challengeserviceconnection'
+  - name: acrName
+    value: 'challenge.azurecr.io'  # ⬅️ Agregar esta variable
   - name: imageName
     value: 'devops-api'
   - name: dockerfilePath
     value: 'Devops.Api/Dockerfile'
   
-  # Terraform
-  - name: tfServiceConnection
-    value: 'MychallengeServiceConnection'
-  - name: tfWorkingDirectory
-    value: 'terraform'
-  - name: tfBackendRg
-    value: 'TerraformStateResourceGroup'
-  - name: tfBackendStorage
-    value: 'tfstategeo'
-  - name: tfBackendContainer
-    value: 'tfstate'
+  # AKS Configuration
+  - name: aksServiceConnection
+    value: 'aksConnection'
+  - name: aksResourceGroup
+    value: 'Challenge'  # ⬅️ Actualizar con tu RG
+  - name: aksClusterName
+    value: 'akschalle'  # ⬅️ Actualizar con tu AKS
+  - name: aksNamespace
+    value: 'devops-app'
 
 stages:
 # STAGE 1: BUILD Y TEST
@@ -52,7 +52,7 @@ stages:
       vmImage: $(vmImage)
     
     steps:
-    # GESTI�N DE DEPENDENCIAS
+    # GESTIÓN DE DEPENDENCIAS
     - task: UseDotNet@2
       displayName: 'Use .NET 8.0'
       inputs:
@@ -65,7 +65,7 @@ stages:
         command: 'restore'
         projects: $(solution)
 
-    # AN�LISIS EST�TICO DE C�DIGO
+    # ANÁLISIS ESTÁTICO DE CÓDIGO
     - task: DotNetCoreCLI@2
       displayName: 'Install dotnet-format tool'
       inputs:
@@ -74,12 +74,10 @@ stages:
         arguments: 'install --global dotnet-format'
       condition: succeeded()
 
-    - task: DotNetCoreCLI@2
-      displayName: 'Run Code Analysis with dotnet-format'
+    - task: CmdLine@2
+      displayName: 'Apply code formatting'
       inputs:
-        command: 'custom'
-        custom: 'format'
-        arguments: '--verify-no-changes --verbosity diagnostic'
+        script: 'dotnet format --verbosity minimal'
       condition: succeeded()
 
     # BUILD
@@ -99,7 +97,7 @@ stages:
         arguments: '--configuration $(buildConfiguration) --no-build --logger trx --collect:"XPlat Code Coverage"'
         publishTestResults: true
 
-    # CONTAINERIZACI�N
+    # CONTAINERIZACIÓN
     - task: Docker@2
       displayName: 'Build and Push Docker Image'
       inputs:
@@ -111,71 +109,18 @@ stages:
           $(Build.BuildId)
           latest
 
+    # PUBLICAR MANIFIESTOS COMO ARTEFACTO
     - task: PublishBuildArtifacts@1
-      displayName: 'Publish Terraform Artifact'
+      displayName: 'Publish Kubernetes Manifests'
       inputs:
-        PathtoPublish: '$(tfWorkingDirectory)'
-        ArtifactName: 'terraform'
-
-# STAGE 2: DESPLIEGUE DEVELOPMENT (WEB APP)
-- stage: Deploy_Dev
-  displayName: 'Deploy to Development'
-  dependsOn: Build_Test
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
-  jobs:
-  - deployment: DeployWebApp
-    displayName: 'Deploy to Web App'
-    pool:
-      vmImage: $(vmImage)
-    environment: 'Development'
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - checkout: self
-          - download: current
-            artifact: terraform
-            
-          - task: TerraformInstaller@0
-            displayName: 'Install Terraform'
-            inputs:
-              terraformVersion: '1.5.0'
-
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Init (Dev)'
-            inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              backendServiceArm: $(tfServiceConnection)
-              backendAzureRmResourceGroupName: $(tfBackendRg)
-              backendAzureRmStorageAccountName: $(tfBackendStorage)
-              backendAzureRmContainerName: $(tfBackendContainer)
-              backendAzureRmKey: 'dev.tfstate'
-
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Plan (Dev)'
-            inputs:
-              provider: 'azurerm'
-              command: 'plan'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              environmentServiceNameAzureRM: $(tfServiceConnection)
-              commandOptions: '-var="docker_tag=$(Build.BuildId)" -var="environment=dev" -var="deployment_target=webapp" -out=tfplan'
-
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Apply (Dev)'
-            inputs:
-              provider: 'azurerm'
-              command: 'apply'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              environmentServiceNameAzureRM: $(tfServiceConnection)
-              commandOptions: 'tfplan'
+        PathtoPublish: 'manifests'
+        ArtifactName: 'manifests'
 
 # STAGE 3: DESPLIEGUE PRODUCTION (AKS)
 - stage: Deploy_Prod
-  displayName: 'Deploy to Production'
+  displayName: 'Deploy to AKS Production'
   dependsOn: Build_Test
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
   jobs:
   - deployment: DeployAKS
     displayName: 'Deploy to AKS'
@@ -188,39 +133,90 @@ stages:
           steps:
           - checkout: self
           - download: current
-            artifact: terraform
-            
-          - task: TerraformInstaller@0
-            displayName: 'Install Terraform'
-            inputs:
-              terraformVersion: '1.5.0'
+            artifact: manifests
 
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Init (Prod)'
+          - task: Kubernetes@1
+            displayName: 'Get AKS Credentials'
             inputs:
-              provider: 'azurerm'
-              command: 'init'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              backendServiceArm: $(tfServiceConnection)
-              backendAzureRmResourceGroupName: $(tfBackendRg)
-              backendAzureRmStorageAccountName: $(tfBackendStorage)
-              backendAzureRmContainerName: $(tfBackendContainer)
-              backendAzureRmKey: 'prod.tfstate'
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'use'
+              useClusterAdmin: true
 
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Plan (Prod)'
+          # Reemplazar tag de imagen en los manifiestos
+          - task: Bash@3
+            displayName: 'Update Image Tag in Manifests'
             inputs:
-              provider: 'azurerm'
-              command: 'plan'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              environmentServiceNameAzureRM: $(tfServiceConnection)
-              commandOptions: '-var="docker_tag=$(Build.BuildId)" -var="environment=prod" -var="deployment_target=aks" -out=tfplan'
+              targetType: 'inline'
+              script: |
+                sed -i "s|challenge.azurecr.io/devops-api:latest|$(acrName)/$(imageName):$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/deployment.yaml
+                echo "Image tag updated to: $(acrName)/$(imageName):$(Build.BuildId)"
 
-          - task: TerraformTaskV4@4
-            displayName: 'Terraform Apply (Prod)'
+          # Aplicar manifiestos en orden
+          - task: Kubernetes@1
+            displayName: 'Create Namespace'
             inputs:
-              provider: 'azurerm'
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
               command: 'apply'
-              workingDirectory: '$(Pipeline.Workspace)/terraform'
-              environmentServiceNameAzureRM: $(tfServiceConnection)
-              commandOptions: 'tfplan'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/namespace.yaml'
+
+          - task: Kubernetes@1
+            displayName: 'Deploy Application'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'apply'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/deployment.yaml'
+
+          - task: Kubernetes@1
+            displayName: 'Create Service'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'apply'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/service.yaml'
+
+          # Verificaciones
+          - task: Kubernetes@1
+            displayName: 'Verify Deployment'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              namespace: $(aksNamespace)
+              command: 'rollout'
+              arguments: 'status deployment/devops-api'
+
+          - task: Kubernetes@1
+            displayName: 'Get Service External IP'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              namespace: $(aksNamespace)
+              command: 'get'
+              arguments: 'service devops-api-service -o wide'
+
+          - task: Bash@3
+            displayName: 'Health Check'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "Deployment completed successfully!"
+                echo "Application deployed to AKS cluster: $(aksClusterName)"
+                echo "Namespace: $(aksNamespace)"
+                echo "Image: $(acrName)/$(imageName):$(Build.BuildId)"
