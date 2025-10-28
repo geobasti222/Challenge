@@ -37,7 +37,7 @@ variables:
   - name: tfBackendRg
     value: 'TerraformStateResourceGroup'
   - name: tfBackendStorage
-    value: 'terraformstateSA'
+    value: 'tfstate1761633382'
   - name: tfBackendContainer
     value: 'tfstate'
 
