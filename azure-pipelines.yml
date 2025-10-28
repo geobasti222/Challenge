@@ -116,14 +116,55 @@ stages:
         PathtoPublish: 'manifests'
         ArtifactName: 'manifests'
 
-# STAGE 3: DESPLIEGUE PRODUCTION (AKS)
-- stage: Deploy_Prod
-  displayName: 'Deploy to AKS Production'
-  dependsOn: Build_Test
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+# STAGE 3: DEPLOY TO DEVELOPMENT
+- stage: Deploy_Dev
+  displayName: 'Deploy to Development'
+  dependsOn: Test
+  condition: |
+    and(
+      succeeded(),
+      or(
+        eq(variables['Build.SourceBranch'], 'refs/heads/develop'),
+        startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/')
+      )
+    )
   jobs:
-  - deployment: DeployAKS
-    displayName: 'Deploy to AKS'
+  - deployment: Deploy_Development
+    displayName: 'Deploy to Development'
+    pool:
+      vmImage: $(vmImage)
+    environment: 'Development'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy to AKS (Development)'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                set -e
+                echo "=== DESPLIEGUE EN DESARROLLO ==="
+                
+                az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+                
+                # Usar Kustomize para desarrollo
+                kubectl apply -k manifests/development/
+                
+                echo "✅ Desarrollo desplegado con configuración optimizada"
+
+# STAGE 4: DEPLOY TO PRODUCTION
+- stage: Deploy_Prod
+  displayName: 'Deploy to Production'
+  dependsOn: Test
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - deployment: Deploy_Production
+    displayName: 'Deploy to Production with Full Configuration'
     pool:
       vmImage: $(vmImage)
     environment: 'Production'
@@ -132,70 +173,23 @@ stages:
         deploy:
           steps:
           - checkout: self
-          - download: current
-            artifact: manifests
 
-          # DESPLIEGUE A AKS USANDO AZURE CLI (MÁS CONFIABLE)
           - task: AzureCLI@2
-            displayName: 'Deploy to AKS using kubectl'
+            displayName: 'Deploy to AKS (Production)'
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                set -e  # Exit on error
+                set -e
+                echo "=== DESPLIEGUE EN PRODUCCIÓN ==="
                 
-                echo "=== OBTENIENDO CREDENCIALES DE AKS ==="
-                az aks get-credentials \
-                  --resource-group $(aksResourceGroup) \
-                  --name $(aksClusterName) \
-                  --overwrite-existing
-                echo "✅ Credenciales de AKS configuradas"
+                az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
                 
-                # Mostrar información del cluster
-                echo "=== INFORMACIÓN DEL CLUSTER ==="
-                kubectl cluster-info
-                kubectl get nodes
+                # Actualizar tag en kustomization
+                sed -i "s|\\$\\(Build.BuildId\\)|$(Build.BuildId)|g" manifests/production/kustomization.yaml
                 
-                echo "=== ACTUALIZANDO IMAGEN EN MANIFIESTO ==="
-                sed -i "s|challenge.azurecr.io/devops-api:latest|$(acrName)/$(imageName):$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/deployment.yaml
-                echo "✅ Imagen actualizada: $(acrName)/$(imageName):$(Build.BuildId)"
+                # Usar Kustomize para producción
+                kubectl apply -k manifests/production/
                 
-                echo "=== APLICANDO MANIFIESTOS ==="
-                kubectl apply -f $(Pipeline.Workspace)/manifests/namespace.yaml
-                echo "✅ Namespace creado"
-                
-                kubectl apply -f $(Pipeline.Workspace)/manifests/deployment.yaml
-                echo "✅ Deployment aplicado"
-                
-                kubectl apply -f $(Pipeline.Workspace)/manifests/service.yaml
-                echo "✅ Service creado"
-                
-                echo "=== VERIFICANDO DESPLIEGUE ==="
-                kubectl rollout status deployment/devops-api -n $(aksNamespace) --timeout=300s
-                echo "✅ Deployment completado exitosamente"
-                
-                echo "=== INFORMACIÓN FINAL ==="
-                kubectl get pods -n $(aksNamespace)
-                kubectl get service devops-api-service -n $(aksNamespace) -o wide
-                
-                echo ""
-                echo "🎉 DESPLIEGUE EXITOSO"
-                echo "📦 Aplicación: devops-api"
-                echo "🏷️  Imagen: $(acrName)/$(imageName):$(Build.BuildId)"
-                echo "📁 Namespace: $(aksNamespace)"
-                echo "🖥️  Cluster: $(aksClusterName)"
-
-          # HEALTH CHECK ADICIONAL
-          - task: Bash@3
-            displayName: 'Final Health Check'
-            inputs:
-              targetType: 'inline'
-              script: |
-                echo "=== RESUMEN DEL DESPLIEGUE ==="
-                echo "✅ Build completado: $(Build.BuildId)"
-                echo "✅ Imagen publicada en ACR"
-                echo "✅ Aplicación desplegada en AKS"
-                echo "✅ Todos los manifiestos aplicados"
-                echo ""
-                echo "La aplicación está lista en el cluster AKS"
+                echo "✅ Producción desplegada con alta disponibilidad"
