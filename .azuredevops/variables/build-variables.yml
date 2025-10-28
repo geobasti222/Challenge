@@ -1,7 +1,0 @@
-variables:
-  - name: solution
-    value: 'Challenge.sln'
-  - name: testProject
-    value: 'Tests/**/*.csproj'
-  - name: dockerfilePath
-    value: 'Devops.Api/Dockerfile'

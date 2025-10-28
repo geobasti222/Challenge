@@ -1,5 +1,0 @@
-variables:
-  - name: vmImage
-    value: 'ubuntu-latest'
-  - name: buildConfiguration
-    value: 'Release'

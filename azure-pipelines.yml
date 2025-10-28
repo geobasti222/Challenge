@@ -1,4 +1,4 @@
-﻿# Pipeline principal - orquesta todas las etapas
+﻿# Pipeline principal
 name: $(BuildID)-$(SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
@@ -6,10 +6,6 @@ trigger:
     include:
       - master
       - develop
-  paths:
-    exclude:
-    - README.md
-    - .gitignore
 
 pr:
   branches:
@@ -17,21 +13,68 @@ pr:
       - master
       - develop
 
-# Incluir variables
+# Variables globales
 variables:
-  - template: .azuredevops/variables/global-variables.yml
-  - template: .azuredevops/variables/build-variables.yml
-  - template: .azuredevops/variables/deploy-variables.yml
+  - name: vmImage
+    value: 'ubuntu-latest'
+  - name: buildConfiguration
+    value: 'Release'
+  - name: solution
+    value: 'Challenge.sln'
+  - name: testProject
+    value: 'Tests/**/*.csproj'
+  - name: dockerfilePath
+    value: 'Devops.Api/Dockerfile'
+  - name: acrServiceConnection
+    value: 'challengeserviceconnection'
+  - name: acrName
+    value: 'challenge.azurecr.io'
+  - name: imageName
+    value: 'devops-api'
+  - name: azureServiceConnection
+    value: 'MychallengeServiceConnection'
+  - name: aksResourceGroup
+    value: 'Challenge'
+  - name: aksClusterName
+    value: 'akschalle'
+  - name: aksNamespaceDev
+    value: 'devops-app-dev'
+  - name: aksNamespaceProd
+    value: 'devops-app-prod'
 
 stages:
   # Build Stage
-  - template: .azuredevops/pipeline-templates/build-stage.yml
+  - stage: Build
+    displayName: 'Build Application'
+    jobs:
+    - template: .azuredevops/pipeline-templates/build-job.yml
 
-  # Test Stage  
-  - template: .azuredevops/pipeline-templates/test-stage.yml
+  # Test Stage
+  - stage: Test
+    displayName: 'Run Tests'
+    dependsOn: Build
+    jobs:
+    - template: .azuredevops/pipeline-templates/test-job.yml
 
   # Development Deployment
-  - template: .azuredevops/pipeline-templates/deploy-dev-stage.yml
+  - stage: Deploy_Dev
+    displayName: 'Deploy to Development'
+    dependsOn: Test
+    condition: |
+      and(
+        succeeded(),
+        or(
+          eq(variables['Build.SourceBranch'], 'refs/heads/develop'),
+          startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/')
+        )
+      )
+    jobs:
+    - template: .azuredevops/pipeline-templates/deploy-dev-job.yml
 
   # Production Deployment
-  - template: .azuredevops/pipeline-templates/deploy-prod-stage.yml
+  - stage: Deploy_Prod
+    displayName: 'Deploy to Production'
+    dependsOn: Test
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+    jobs:
+    - template: .azuredevops/pipeline-templates/deploy-prod-job.yml
