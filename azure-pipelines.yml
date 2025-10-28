@@ -1,4 +1,4 @@
-﻿# Pipeline principal
+﻿# Pipeline principal completo
 name: $(BuildID)-$(SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
@@ -13,7 +13,6 @@ pr:
       - master
       - develop
 
-# Variables globales
 variables:
   - name: vmImage
     value: 'ubuntu-latest'
@@ -43,20 +42,30 @@ variables:
     value: 'devops-app-prod'
 
 stages:
-  # Build Stage
+  # STAGE 1: BUILD
   - stage: Build
     displayName: 'Build Application'
     jobs:
-    - template: .azuredevops/pipeline-templates/build-job.yml
+    - job: Build
+      displayName: 'Build and Package'
+      pool:
+        vmImage: $(vmImage)
+      steps:
+      - template: .azuredevops/templates/build-steps.yml
 
-  # Test Stage
+  # STAGE 2: TEST
   - stage: Test
     displayName: 'Run Tests'
     dependsOn: Build
     jobs:
-    - template: .azuredevops/pipeline-templates/test-job.yml
+    - job: Test
+      displayName: 'Execute Automated Tests'
+      pool:
+        vmImage: $(vmImage)
+      steps:
+      - template: .azuredevops/templates/test-steps.yml
 
-  # Development Deployment
+  # STAGE 3: DEPLOY DEVELOPMENT
   - stage: Deploy_Dev
     displayName: 'Deploy to Development'
     dependsOn: Test
@@ -69,12 +78,30 @@ stages:
         )
       )
     jobs:
-    - template: .azuredevops/pipeline-templates/deploy-dev-job.yml
+    - deployment: Deploy_Development
+      displayName: 'Deploy to Development Environment'
+      pool:
+        vmImage: $(vmImage)
+      environment: 'Development'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - template: .azuredevops/templates/deploy-dev-steps.yml
 
-  # Production Deployment
+  # STAGE 4: DEPLOY PRODUCTION
   - stage: Deploy_Prod
     displayName: 'Deploy to Production'
     dependsOn: Test
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
     jobs:
-    - template: .azuredevops/pipeline-templates/deploy-prod-job.yml
+    - deployment: Deploy_Production
+      displayName: 'Deploy to Production Environment'
+      pool:
+        vmImage: $(vmImage)
+      environment: 'Production'
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - template: .azuredevops/templates/deploy-prod-steps.yml
