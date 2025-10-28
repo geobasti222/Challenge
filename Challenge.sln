@@ -5,7 +5,7 @@ VisualStudioVersion = 17.14.36616.10 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devops.Api", "Devops.Api\Devops.Api.csproj", "{FC14A125-DA60-4517-9FB0-2D4A6A477FA5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DevOps.Api.Tests", "Tests\DevOps.Api.Tests\DevOps.Api.Tests.csproj", "{6A583268-1062-24BE-D1DD-E2CF54532DFF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devops.Api.Tests", "Tests\Devops.Api.Tests\Devops.Api.Tests.csproj", "{6A583268-1062-24BE-D1DD-E2CF54532DFF}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "terraform", "terraform", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 	ProjectSection(SolutionItems) = preProject
