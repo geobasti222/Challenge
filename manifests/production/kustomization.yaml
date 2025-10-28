@@ -30,6 +30,7 @@ patches:
       - name: ASPNETCORE_ENVIRONMENT
         value: "Production"
 
+# USAR LATEST EN LUGAR DE v1.0.0
 images:
 - name: challenge.azurecr.io/devops-api
-  newTag: v1.0.0  # Este será reemplazado vía línea de comandos
+  newTag: "latest"  # ← CAMBIAR v1.0.0 por latest

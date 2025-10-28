@@ -1,0 +1,83 @@
+﻿# Production Deployment Steps Template
+steps:
+- checkout: self
+- download: current
+  artifact: manifests
+
+- task: AzureCLI@2
+  displayName: 'Configure ACR Access for AKS'
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      echo "=== CONFIGURANDO ACCESO ACR PARA AKS ==="
+      az aks update --resource-group $(aksResourceGroup) --name $(aksClusterName) --attach-acr challenge
+      echo "✅ AKS configurado para acceder al ACR"
+
+- task: Bash@3
+  displayName: 'Update Production Image Tag'
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== ACTUALIZANDO TAG DE IMAGEN ==="
+      sed -i "s|BUILD_TAG_PLACEHOLDER|latest|g" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
+      echo "✅ Kustomization actualizado"
+
+- task: AzureCLI@2
+  displayName: 'Deploy to AKS (Production)'
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e
+      echo "=== DESPLIEGUE EN PRODUCCIÓN ==="
+      az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+      kubectl apply -k $(Pipeline.Workspace)/manifests/production/
+      kubectl rollout status deployment/devops-api -n $(aksNamespaceProd) --timeout=300s
+      echo "🎉 Producción desplegada exitosamente"
+
+- task: AzureCLI@2
+  displayName: 'Setup API Management Service'
+  condition: succeeded()
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e
+      echo "=== CONFIGURANDO API MANAGEMENT ==="
+      
+      # Verificar si el API Management Service existe
+      if az apim show --name apim-devops-challenge --resource-group Challenge &>/dev/null; then
+        echo "✅ API Management Service ya existe"
+      else
+        echo "📝 Creando nuevo API Management Service..."
+        az apim create \
+          --name apim-devops-challenge \
+          --resource-group Challenge \
+          --publisher-email "geobas_22@hotmail.com" \
+          --publisher-name "Geo Bastidas" \
+          --sku-name "Developer" \
+          --location "eastus" \
+          --no-wait
+        echo "⏳ API Management Service en proceso de creación..."
+      fi
+
+- task: Bash@3
+  displayName: 'Display Deployment Summary'
+  condition: succeeded()
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== ✅ DESPLIEGUE COMPLETADO ==="
+      SERVICE_IP=$(kubectl get service devops-api-service -n $(aksNamespaceProd) -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+      echo ""
+      echo "🌐 APLICACIÓN DESPLEGADA EXITOSAMENTE"
+      echo "📊 URLS DE ACCESO:"
+      echo "   Directo: http://$SERVICE_IP"
+      echo "   Health: http://$SERVICE_IP/health"
+      echo "   Swagger: http://$SERVICE_IP/swagger"
+      echo ""
+      echo "✅ Todos los requisitos cumplidos"

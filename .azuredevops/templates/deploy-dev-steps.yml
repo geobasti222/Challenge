@@ -1,0 +1,19 @@
+﻿# Development Deployment Steps Template
+steps:
+- checkout: self
+- download: current
+  artifact: manifests
+
+- task: AzureCLI@2
+  displayName: 'Deploy to AKS (Development)'
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e
+      echo "=== DESPLIEGUE EN DESARROLLO ==="
+      az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+      kubectl apply -k $(Pipeline.Workspace)/manifests/development/
+      kubectl rollout status deployment/devops-api -n $(aksNamespaceDev) --timeout=180s
+      echo "✅ Desarrollo desplegado exitosamente"
