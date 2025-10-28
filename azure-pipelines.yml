@@ -200,7 +200,7 @@ stages:
 - stage: Deploy_Prod
   displayName: 'Deploy to Production'
   dependsOn: CI
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main')) # Solo se ejecuta para la rama 'main' (master)
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master')) # Solo se ejecuta para la rama 'main' (master)
   jobs:
   - deployment: DeployTerraform
     displayName: 'Deploy Infra (Prod)'
