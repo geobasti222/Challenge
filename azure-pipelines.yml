@@ -121,7 +121,7 @@ stages:
 # STAGE 2: DEPLOY TO DEVELOPMENT
 - stage: Deploy_Dev
   displayName: 'Deploy to Development'
-  dependsOn: Build_Test  # ← CORREGIDO: Cambiado de 'Test' a 'Build_Test'
+  dependsOn: Build_Test
   condition: |
     and(
       succeeded(),
@@ -141,8 +141,19 @@ stages:
         deploy:
           steps:
           - checkout: self
-          - download: current  # ← AGREGADO: Descargar artefactos
+          - download: current
             artifact: manifests
+
+          - task: AzureCLI@2
+            displayName: 'Verify Azure Connection'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "=== VERIFICANDO CONEXIÓN AZURE ==="
+                az account show
+                echo "✅ Conexión a Azure exitosa"
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Development)'
@@ -152,18 +163,49 @@ stages:
               scriptLocation: 'inlineScript'
               inlineScript: |
                 set -e
-                echo "=== DESPLIEGUE EN DESARROLLO ==="
+                echo "=== INICIANDO DESPLIEGUE EN DESARROLLO ==="
                 
-                az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
+                # Verificar que los manifiestos existen
+                echo "Verificando archivos de manifiesto..."
+                ls -la $(Pipeline.Workspace)/manifests/
+                ls -la $(Pipeline.Workspace)/manifests/development/
                 
-                # Usar Kustomize para desarrollo
+                echo "=== OBTENIENDO CREDENCIALES AKS ==="
+                az aks get-credentials \
+                  --resource-group $(aksResourceGroup) \
+                  --name $(aksClusterName) \
+                  --overwrite-existing \
+                  --verbose
+                
+                echo "=== VERIFICANDO CONEXIÓN A KUBERNETES ==="
+                kubectl cluster-info
+                kubectl get nodes
+                
+                echo "=== APLICANDO CONFIGURACIÓN DE DESARROLLO ==="
+                # Aplicar con Kustomize
+                kubectl apply -k $(Pipeline.Workspace)/manifests/development/ --dry-run=client
                 kubectl apply -k $(Pipeline.Workspace)/manifests/development/
                 
-                # Verificar despliegue
+                echo "=== VERIFICANDO DESPLIEGUE ==="
+                # Esperar y verificar
+                sleep 30
+                kubectl get all -n $(aksNamespaceDev)
                 kubectl rollout status deployment/devops-api -n $(aksNamespaceDev) --timeout=180s
                 
-                echo "✅ Desarrollo desplegado con configuración optimizada"
-                kubectl get pods -n $(aksNamespaceDev)
+                echo "🎉 ✅ DESARROLLO DESPLEGADO EXITOSAMENTE"
+                echo "📦 Namespace: $(aksNamespaceDev)"
+                echo "🐳 Imagen: $(acrName)/$(imageName):develop-latest"
+
+          - task: Bash@3
+            displayName: 'Final Verification'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "=== VERIFICACIÓN FINAL ==="
+                echo "✅ Build: $(Build.BuildId)"
+                echo "✅ Rama: $(Build.SourceBranch)"
+                echo "✅ Entorno: Development"
+                echo "✅ Despliegue completado"
 
 # STAGE 3: DEPLOY TO PRODUCTION
 - stage: Deploy_Prod
