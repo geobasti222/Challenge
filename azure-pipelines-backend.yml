@@ -1,4 +1,4 @@
-# create-storage-account-fixed.yml
+# create-storage-canada.yml
 trigger: none
 pr: none
 
@@ -8,41 +8,37 @@ pool:
 variables:
   resourceGroupName: 'TerraformStateResourceGroup'
   containerName: 'tfstate'
+  location: 'canadacentral'  # ← Región que SÍ te funciona
 
 steps:
 - task: AzureCLI@2
-  displayName: 'Create Storage Account via Service Principal'
+  displayName: 'Create Storage Account in Canada Central'
   inputs:
-    azureSubscription: 'MychallengeServiceConnection'  # Tu service connection existente
+    azureSubscription: 'MychallengeServiceConnection'
     scriptType: 'bash'
     scriptLocation: 'inlineScript'
     inlineScript: |
       set -e
       
-      echo "=== Verificando autenticación ==="
+      echo "=== Usando región: $(location) ==="
       az account show
       
-      echo "=== Verificando permisos ==="
-      az role assignment list --assignee "8d2aaea2-169a-488a-8a5c-81aa28612a52" --output table
-      
-      echo "=== Creando Storage Account ==="
-      # Generar nombre único
+      echo "=== Creando Storage Account en Canadá ==="
       TIMESTAMP=$(date +%s)
       STORAGE_NAME="tfstate$TIMESTAMP"
       echo "Nuevo Storage Account: $STORAGE_NAME"
       
-      # Crear Resource Group si no existe
-      az group create --name $(resourceGroupName) --location eastus --tags CreatedBy=AzureDevOps || echo "Resource Group ya existe"
+      # Crear Resource Group en Canadá
+      az group create --name $(resourceGroupName) --location $(location) --tags Region=Canada || echo "RG ya existe"
       
-      # Crear Storage Account
+      # Crear Storage Account en Canadá
       az storage account create \
         --resource-group $(resourceGroupName) \
         --name $STORAGE_NAME \
         --sku Standard_LRS \
         --encryption-services blob \
-        --location eastus \
-        --allow-blob-public-access false \
-        --https-only true
+        --location $(location) \
+        --allow-blob-public-access false
       
       echo "Esperando a que el Storage Account esté listo..."
       sleep 30
@@ -54,18 +50,18 @@ steps:
         --auth-mode login
       
       echo ""
-      echo "=== ✅ STORAGE ACCOUNT CREADO EXITOSAMENTE ==="
+      echo "=== ✅ STORAGE ACCOUNT CREADO EN CANADÁ ==="
       echo "Resource Group: $(resourceGroupName)"
       echo "Storage Account: $STORAGE_NAME" 
       echo "Container: $(containerName)"
+      echo "Location: $(location)"
       echo ""
-      echo "=== 🔧 ACTUALIZA TU PIPELINE PRINCIPAL ==="
+      echo "=== 🔧 ACTUALIZA TU PIPELINE ==="
       echo "Variable: tfBackendStorage = $STORAGE_NAME"
 
 - task: Bash@3
-  displayName: 'Mostrar valores finales'
+  displayName: 'Mostrar valores'
   inputs:
     targetType: 'inline'
     script: |
-      echo "Una vez que el pipeline termine, copia el nombre del Storage Account"
-      echo "y actualiza la variable 'tfBackendStorage' en tu pipeline principal"
+      echo "Storage Account creado exitosamente en Canadá"
