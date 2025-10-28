@@ -1,0 +1,32 @@
+# Test Stage Template
+- stage: Test
+  displayName: 'Run Tests'
+  dependsOn: Build
+  jobs:
+  - job: Test
+    displayName: 'Execute Automated Tests'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: 'Run Unit Tests'
+      inputs:
+        command: 'test'
+        projects: $(testProject)
+        arguments: '--configuration $(buildConfiguration) --no-build --logger trx --collect:"XPlat Code Coverage"'
+        publishTestResults: true
+
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      inputs:
+        testRunner: 'VSTest'
+        testResultsFiles: '**/*.trx'
+        searchFolder: '$(Agent.TempDirectory)'
+      condition: succeededOrFailed()
+
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish Code Coverage'
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'

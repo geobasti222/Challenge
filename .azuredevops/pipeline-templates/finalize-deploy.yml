@@ -1,0 +1,46 @@
+﻿# Finalize Deployment Tasks
+steps:
+- task: AzureCLI@2
+  displayName: 'Configure API in API Management'
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e
+      echo "=== CONFIGURANDO API EN API MANAGEMENT ==="
+      
+      # Verificar que el APIM esté listo
+      APIM_STATUS=$(az apim show --name $(apimServiceName) --resource-group $(apimResourceGroup) --query "provisioningState" -o tsv)
+      if [ "$APIM_STATUS" != "Succeeded" ]; then
+        echo "⚠️  API Management no está listo (Estado: $APIM_STATUS)"
+        exit 0
+      fi
+      
+      echo "✅ API Management Service listo"
+      
+      # Obtener IP y configurar API
+      SERVICE_IP=$(kubectl get service devops-api-service -n $(aksNamespaceProd) -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+      if [ -n "$SERVICE_IP" ]; then
+        echo "✅ Configurando API para IP: $SERVICE_IP"
+        
+        # Crear o actualizar API
+        if az apim api show --resource-group $(apimResourceGroup) --service-name $(apimServiceName) --api-id 'devops-api-prod' &>/dev/null; then
+          az apim api update --resource-group $(apimResourceGroup) --service-name $(apimServiceName) --api-id 'devops-api-prod' --service-url "http://$SERVICE_IP/api"
+        else
+          az apim api create --resource-group $(apimResourceGroup) --service-name $(apimServiceName) --api-id 'devops-api-prod' --display-name 'DevOps API Production' --path 'devops' --service-url "http://$SERVICE_IP/api" --protocols https --subscription-required true
+        fi
+        echo "✅ API Management configurado"
+      fi
+
+- task: Bash@3
+  displayName: 'Display Deployment Summary'
+  condition: succeeded()
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== ✅ DESPLIEGUE COMPLETADO ==="
+      SERVICE_IP=$(kubectl get service devops-api-service -n $(aksNamespaceProd) -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+      echo "🌐 Aplicación disponible en: http://$SERVICE_IP"
+      echo "🔍 Health Check: http://$SERVICE_IP/health"
