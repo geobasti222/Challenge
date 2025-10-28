@@ -1,0 +1,88 @@
+﻿# azure-pipelines-backend.yml
+# Pipeline TEMPORAL solo para crear el backend de Terraform
+# Ejecutar UNA sola vez y luego eliminar este pipeline
+
+trigger: none # No trigger automático
+
+pr: none # No trigger por PR
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  resourceGroupName: 'TerraformStateResourceGroup'
+  location: 'eastus'
+  containerName: 'tfstate'
+
+steps:
+- task: AzureCLI@2
+  displayName: 'Create Resource Group and Storage Account'
+  inputs:
+    azureSubscription: 'MychallengeServiceConnection'  # Tu service connection
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      set -e  # Exit on error
+      
+      echo "=== CREATING TERRAFORM BACKEND ==="
+      
+      # Crear Resource Group
+      echo "1. Creating Resource Group: $(resourceGroupName)"
+      az group create --name $(resourceGroupName) --location $(location) || echo "Resource Group already exists"
+      
+      # Generar nombre único para Storage Account
+      TIMESTAMP=$(date +%s)
+      STORAGE_NAME="tfstate$TIMESTAMP"
+      echo "2. Generated Storage Account name: $STORAGE_NAME"
+      
+      # Crear Storage Account
+      echo "3. Creating Storage Account: $STORAGE_NAME"
+      az storage account create \
+        --resource-group $(resourceGroupName) \
+        --name $STORAGE_NAME \
+        --sku Standard_LRS \
+        --encryption-services blob \
+        --location $(location) \
+        --allow-blob-public-access false
+      
+      # Crear container
+      echo "4. Creating container: $(containerName)"
+      az storage container create \
+        --name $(containerName) \
+        --account-name $STORAGE_NAME \
+        --auth-mode login
+      
+      # Configurar Network Rules (más seguro)
+      echo "5. Configuring network rules"
+      az storage account update \
+        --resource-group $(resourceGroupName) \
+        --name $STORAGE_NAME \
+        --default-action Deny
+      
+      echo "6. Backend creation completed successfully!"
+      
+      # Mostrar información importante
+      echo ""
+      echo "=== ✅ BACKEND CREATED SUCCESSFULLY ==="
+      echo "=== 📝 COPY THESE VALUES FOR YOUR MAIN PIPELINE ==="
+      echo ""
+      echo "Resource Group: $(resourceGroupName)"
+      echo "Storage Account: $STORAGE_NAME"
+      echo "Container: $(containerName)"
+      echo ""
+      echo "=== 🔧 UPDATE YOUR MAIN PIPELINE VARIABLES ==="
+      echo "Set these variables in your main pipeline:"
+      echo "- tfBackendRg: $(resourceGroupName)"
+      echo "- tfBackendStorage: $STORAGE_NAME"
+      echo "- tfBackendContainer: $(containerName)"
+      echo ""
+      echo "=== 🗑️ IMPORTANTE: ELIMINA ESTE PIPELINE DESPUÉS DE USARLO ==="
+
+- task: Bash@3
+  displayName: 'Verificar creación'
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== VERIFICACIÓN COMPLETADA ==="
+      echo "El backend de Terraform está listo para usar"
+      echo "Ahora actualiza las variables en tu pipeline principal"
