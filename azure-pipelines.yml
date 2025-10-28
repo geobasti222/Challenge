@@ -183,7 +183,7 @@ stages:
                 
                 echo "✅ DESARROLLO DESPLEGADO EXITOSAMENTE"
 
-# STAGE 3: DEPLOY TO PRODUCTION
+# STAGE 3: DEPLOY TO PRODUCTION - CON DIAGNÓSTICO
 - stage: Deploy_Prod
   displayName: 'Deploy to Production'
   dependsOn: Build_Test
@@ -220,13 +220,8 @@ stages:
               script: |
                 echo "=== ACTUALIZANDO TAG DE IMAGEN ==="
                 echo "Build ID: $(Build.BuildId)"
-                
-                # Convertir a string y reemplazar el placeholder
                 sed -i "s|BUILD_TAG_PLACEHOLDER|$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
-                
-                # Verificar el cambio
-                echo "✅ Kustomization actualizado:"
-                grep -A 2 -B 2 "newTag" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
+                echo "✅ Kustomization actualizado"
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Production)'
@@ -244,34 +239,68 @@ stages:
                 echo "=== VERIFICANDO IMAGEN EN ACR ==="
                 az acr repository show-tags --name challenge --repository devops-api --output table
                 
-                # Verificar el kustomization antes de aplicar
-                echo "=== VERIFICANDO KUSTOMIZATION ==="
-                cat $(Pipeline.Workspace)/manifests/production/kustomization.yaml
-                
                 echo "=== APLICANDO CONFIGURACIÓN ==="
                 kubectl apply -k $(Pipeline.Workspace)/manifests/production/
                 
-                echo "=== ESPERANDO DESPLIEGUE ==="
-                # Esperar inicial para descarga de imagen
-                sleep 45
+                echo "=== MONITOREANDO DESPLIEGUE EN TIEMPO REAL ==="
                 
-                # Verificar estado con timeout extendido
-                if kubectl rollout status deployment/devops-api -n devops-app-prod --timeout=600s; then
+                # Iniciar monitoreo en background
+                kubectl get pods -n devops-app-prod -w &
+                MONITOR_PID=$!
+                
+                # Esperar un poco para que los pods empiecen
+                sleep 30
+                
+                # Verificar estado de los pods inmediatamente
+                echo "=== ESTADO INICIAL DE PODS ==="
+                kubectl get pods -n devops-app-prod -o wide
+                
+                # Verificar eventos para diagnóstico
+                echo "=== EVENTOS DEL CLUSTER ==="
+                kubectl get events -n devops-app-prod --sort-by='.lastTimestamp'
+                
+                # Verificar detalles del deployment
+                echo "=== DETALLES DEL DEPLOYMENT ==="
+                kubectl describe deployment devops-api -n devops-app-prod
+                
+                # Intentar rollout status con timeout
+                echo "=== ESPERANDO DESPLIEGUE (con timeout de 5 minutos) ==="
+                if timeout 300s kubectl rollout status deployment/devops-api -n devops-app-prod; then
+                  kill $MONITOR_PID 2>/dev/null
                   echo "🎉 ✅ PRODUCCIÓN DESPLEGADA EXITOSAMENTE"
                   echo "📊 Estado final:"
                   kubectl get all -n devops-app-prod
-                  kubectl get hpa -n devops-app-prod
                 else
-                  echo "❌ FALLO EN EL DESPLIEGUE DE PRODUCCIÓN"
-                  echo "=== DETALLES DEL ERROR ==="
-                  kubectl describe deployment devops-api -n devops-app-prod
+                  kill $MONITOR_PID 2>/dev/null
+                  echo "❌ TIMEOUT - DESPLIEGUE NO COMPLETADO EN 5 MINUTOS"
+                  echo "=== DIAGNÓSTICO DETALLADO ==="
+                  
+                  # Obtener información detallada de los pods
+                  echo "1. PODS Y SUS ESTADOS:"
+                  kubectl get pods -n devops-app-prod -o wide
+                  
+                  echo "2. DESCRIPCIÓN DE PODS FALLIDOS:"
                   kubectl describe pods -n devops-app-prod -l app=devops-api
-                  kubectl logs -n devops-app-prod -l app=devops-api --all-containers=true --tail=50
+                  
+                  echo "3. LOGS DE LOS PODS:"
+                  kubectl logs -n devops-app-prod -l app=devops-api --all-containers=true --prefix=true --tail=50
+                  
+                  echo "4. EVENTOS RECIENTES:"
+                  kubectl get events -n devops-app-prod --sort-by='.lastTimestamp' | tail -20
+                  
+                  echo "5. VERIFICAR IMAGE PULL:"
+                  kubectl describe pods -n devops-app-prod -l app=devops-api | grep -A 10 -B 10 "Image"
+                  
+                  echo "6. VERIFICAR RECURSOS:"
+                  kubectl top pods -n devops-app-prod 2>/dev/null || echo "Metrics no disponibles"
+                  
                   exit 1
                 fi
 
+          # Continuar con API Management solo si el despliegue fue exitoso
           - task: AzureCLI@2
             displayName: 'Configure API Management'
+            condition: succeeded()
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: 'bash'
@@ -281,45 +310,31 @@ stages:
                 
                 # Obtener IP externa del servicio
                 echo "Obteniendo IP del servicio..."
-                kubectl get service devops-api-service -n devops-app-prod -o wide
-                
-                # Esperar a que la IP esté disponible
-                COUNTER=0
-                while [ $COUNTER -lt 12 ]; do
-                  SERVICE_IP=$(kubectl get service devops-api-service -n devops-app-prod -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
-                  if [ -n "$SERVICE_IP" ]; then
-                    echo "✅ IP del servicio: $SERVICE_IP"
-                    break
-                  fi
-                  echo "Esperando IP del servicio... ($((COUNTER*30))s)"
-                  sleep 30
-                  COUNTER=$((COUNTER + 1))
-                done
+                SERVICE_IP=$(kubectl get service devops-api-service -n devops-app-prod -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                 
                 if [ -n "$SERVICE_IP" ]; then
-                  echo "Configurando API Management para: http://$SERVICE_IP"
+                  echo "✅ IP del servicio: $SERVICE_IP"
                   
-                  # Verificar si la API ya existe
-                  if az apim api show --resource-group $(apimResourceGroup) --service-name $(apimServiceName) --api-id 'devops-api-prod' &>/dev/null; then
-                    echo "✅ API ya existe, actualizando..."
+                  # Configurar API Management
+                  if az apim api show --resource-group Challenge --service-name apim-devops-challenge --api-id 'devops-api-prod' &>/dev/null; then
+                    echo "🔄 Actualizando API existente..."
                     az apim api update \
-                      --resource-group $(apimResourceGroup) \
-                      --service-name $(apimServiceName) \
+                      --resource-group Challenge \
+                      --service-name apim-devops-challenge \
                       --api-id 'devops-api-prod' \
                       --service-url "http://$SERVICE_IP"
                   else
                     echo "📝 Creando nueva API..."
                     az apim api create \
-                      --resource-group $(apimResourceGroup) \
-                      --service-name $(apimServiceName) \
+                      --resource-group Challenge \
+                      --service-name apim-devops-challenge \
                       --api-id 'devops-api-prod' \
                       --display-name 'DevOps API Production' \
                       --path 'api' \
                       --service-url "http://$SERVICE_IP" \
-                      --protocols https \
-                      --subscription-required true
+                      --protocols https
                   fi
                   echo "✅ API Management configurado"
                 else
-                  echo "⚠️  No se pudo obtener IP del servicio, omitiendo API Management"
+                  echo "⚠️  No se pudo obtener IP del servicio"
                 fi
