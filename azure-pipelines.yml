@@ -67,11 +67,19 @@ stages:
 
     # ANÁLISIS ESTÁTICO DE CÓDIGO
     - task: DotNetCoreCLI@2
-      displayName: 'Run Code Analysis'
+      displayName: 'Install dotnet-format tool'
       inputs:
         command: 'custom'
         custom: 'tool'
-        arguments: 'run dotnet-format --check --verbosity diagnostic'
+        arguments: 'install --global dotnet-format'
+      condition: succeeded()
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Run Code Analysis with dotnet-format'
+      inputs:
+        command: 'custom'
+        custom: 'format'
+        arguments: '--verify-no-changes --verbosity diagnostic'
       condition: succeeded()
 
     # BUILD
