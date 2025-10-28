@@ -1,0 +1,260 @@
+# azure-pipelines.yml
+# Coloca este archivo en la raíz de tu repositorio Challenge/
+
+trigger:
+  branches:
+    include:
+      - master  # Tu rama 'master' para producción
+      - develop # Una rama de ejemplo para desarrollo
+
+pr:
+  branches:
+    include:
+      - master
+      - develop
+
+variables:
+  # --- Variables Generales ---
+  buildConfiguration: 'Release'
+  vmImage: 'ubuntu-latest'
+  
+  # --- Variables del Proyecto .NET ---
+  solution: 'Challenge.sln'
+  testProject: 'Tests/DevOps.Api.Tests/DevOps.Api.Tests.csproj' # Ajusta si el nombre es diferente
+  
+  # --- Variables de Docker / ACR ---
+  # DEBES crear una conexión de servicio 'MyAcrServiceConnection' en Azure DevOps
+  # que apunte a tu Azure Container Registry (ACR)
+  acrServiceConnection: 'challengeserviceconnection' 
+  acrName: 'challenge.azurecr.io' # Reemplaza con el nombre de tu ACR
+  imageName: 'devops-api'
+  dockerfilePath: 'Devops.Api/Dockerfile'
+
+  # --- Variables de Terraform ---
+  # DEBES crear una conexión de servicio 'MyAzureServiceConnection' en Azure DevOps
+  # con permisos para desplegar en tu suscripción de Azure.
+  tfServiceConnection: 'MychallengeServiceConnection'
+  tfWorkingDirectory: 'terraform'
+  
+  # Configuración del Backend de Terraform (¡Altamente recomendado!)
+  # DEBES tener un storage account para guardar el estado de Terraform
+  tfBackendRg: 'TerraformStateResourceGroup'
+  tfBackendStorage: 'terraformstateSA'
+  tfBackendContainer: 'tfstate'
+  # El 'key' se definirá por entorno
+
+stages:
+- stage: CI
+  displayName: 'Build, Test, Scan & Push'
+  jobs:
+  - job: BuildAndTest
+    displayName: 'Run CI Steps'
+    pool:
+      vmImage: $(vmImage)
+    steps:
+    
+    # 1. GESTIÓN DE DEPENDENCIAS
+    - task: UseDotNet@2
+      displayName: 'Use .NET 8.0' # Ajusta la versión de .NET si es necesario
+      inputs:
+        packageType: 'sdk'
+        version: '8.0.x'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet restore'
+      inputs:
+        command: 'restore'
+        projects: $(solution)
+        feedsToUse: 'select'
+
+    # 2. ANÁLISIS ESTÁTICO DE CÓDIGO (Requisito)
+    # Ejemplo con SonarCloud (requiere configurar SonarCloud y una conexión de servicio)
+    - task: SonarCloudPrepare@1
+      displayName: 'Prepare SonarCloud Analysis'
+      inputs:
+        SonarCloud: 'SonarChallenge' # DEBES crear esta conexión de servicio
+        organization: 'geobasti222'
+        scannerMode: 'MSBuild'
+        projectKey: 'geobasti222_Challenge'
+        projectName: 'Challenge'
+
+    # 3. BUILD (Etapa Build)
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet build'
+      inputs:
+        command: 'build'
+        projects: $(solution)
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+
+    # 4. TEST (Etapa Test y Pruebas Automatizadas)
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet test'
+      inputs:
+        command: 'test'
+        projects: $(testProject)
+        arguments: '--configuration $(buildConfiguration) --no-build --logger trx --results-directory $(Build.ArtifactStagingDirectory)/test-results'
+        publishTestResults: true
+
+    # 5. Publicar Resultados de Pruebas
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: 'VSTest'
+        testResultsFiles: '**/*.trx'
+        searchFolder: '$(Build.ArtifactStagingDirectory)/test-results'
+
+    # 6. Finalizar Análisis Estático
+    - task: SonarCloudAnalyze@1
+      displayName: 'Run SonarCloud Analysis'
+    
+    - task: SonarCloudPublish@1
+      displayName: 'Publish SonarCloud Quality Gate'
+
+    # 7. Construir y Publicar Imagen Docker (Containerizado)
+    # Se usa Build.BuildId para el versionado
+    - task: Docker@2
+      displayName: 'Build and push Docker image'
+      inputs:
+        command: 'buildAndPush'
+        repository: $(imageName)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(acrServiceConnection)
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    # 8. Publicar Artefactos de Terraform para las etapas de Despliegue
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Terraform Artifact'
+      inputs:
+        PathtoPublish: '$(tfWorkingDirectory)'
+        ArtifactName: 'terraform'
+
+# --- DESPLIEGUE MULTI-ENTORNO ---
+
+- stage: Deploy_Dev
+  displayName: 'Deploy to Development'
+  dependsOn: CI
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop')) # Solo se ejecuta para la rama 'develop'
+  jobs:
+  - deployment: DeployTerraform
+    displayName: 'Deploy Infra (Dev)'
+    pool:
+      vmImage: $(vmImage)
+    # Se usa un "Environment" de Azure DevOps para tracking y aprobaciones
+    environment: 'Development' 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self # Asegura que el código esté disponible
+          
+          # Descargar artefactos de Terraform
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'terraform'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          # Instalar Terraform
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          # Terraform Init (con backend)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform init (Dev)'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              backendServiceArm: $(tfServiceConnection)
+              backendAzureRmResourceGroupName: $(tfBackendRg)
+              backendAzureRmStorageAccountName: $(tfBackendStorage)
+              backendAzureRmContainerName: $(tfBackendContainer)
+              backendAzureRmKey: 'dev.tfstate' # Estado específico para Dev
+
+          # Terraform Plan (pasando el tag de la imagen)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform plan (Dev)'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              environmentServiceNameAzureRM: $(tfServiceConnection)
+              commandOptions: '-var="docker_tag=$(Build.BuildId)" -out=tfplan'
+
+          # Terraform Apply (Ejecución bajo demanda con aprobación)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform apply (Dev)'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              environmentServiceNameAzureRM: $(tfServiceConnection)
+              commandOptions: 'tfplan' # Aplica el plan guardado
+
+- stage: Deploy_Prod
+  displayName: 'Deploy to Production'
+  dependsOn: CI
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main')) # Solo se ejecuta para la rama 'main' (master)
+  jobs:
+  - deployment: DeployTerraform
+    displayName: 'Deploy Infra (Prod)'
+    pool:
+      vmImage: $(vmImage)
+    # Ambiente de Producción (puedes configurar APROBACIONES manuales aquí)
+    environment: 'Production' 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'terraform'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          # Terraform Init (con backend de producción)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform init (Prod)'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              backendServiceArm: $(tfServiceConnection)
+              backendAzureRmResourceGroupName: $(tfBackendRg)
+              backendAzureRmStorageAccountName: $(tfBackendStorage)
+              backendAzureRmContainerName: $(tfBackendContainer)
+              backendAzureRmKey: 'prod.tfstate' # Estado específico para Prod
+
+          # Terraform Plan (pasando el tag de la imagen)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform plan (Prod)'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              environmentServiceNameAzureRM: $(tfServiceConnection)
+              commandOptions: '-var="docker_tag=$(Build.BuildId)" -out=tfplan'
+
+          # Terraform Apply (Ejecución bajo demanda con aprobación)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform apply (Prod)'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(System.ArtifactsDirectory)/terraform'
+              environmentServiceNameAzureRM: $(tfServiceConnection)
+              commandOptions: 'tfplan' # Aplica el plan guardado
