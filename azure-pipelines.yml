@@ -38,8 +38,10 @@ variables:
     value: 'Challenge'
   - name: aksClusterName
     value: 'akschalle'
-  - name: aksNamespace
-    value: 'devops-app'
+  - name: aksNamespaceDev
+    value: 'devops-app-dev'
+  - name: aksNamespaceProd
+    value: 'devops-app-prod'
 
 stages:
 # STAGE 1: BUILD Y TEST
@@ -116,10 +118,10 @@ stages:
         PathtoPublish: 'manifests'
         ArtifactName: 'manifests'
 
-# STAGE 3: DEPLOY TO DEVELOPMENT
+# STAGE 2: DEPLOY TO DEVELOPMENT
 - stage: Deploy_Dev
   displayName: 'Deploy to Development'
-  dependsOn: Test
+  dependsOn: Build_Test  # ← CORREGIDO: Cambiado de 'Test' a 'Build_Test'
   condition: |
     and(
       succeeded(),
@@ -139,6 +141,8 @@ stages:
         deploy:
           steps:
           - checkout: self
+          - download: current  # ← AGREGADO: Descargar artefactos
+            artifact: manifests
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Development)'
@@ -153,14 +157,18 @@ stages:
                 az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
                 
                 # Usar Kustomize para desarrollo
-                kubectl apply -k manifests/development/
+                kubectl apply -k $(Pipeline.Workspace)/manifests/development/
+                
+                # Verificar despliegue
+                kubectl rollout status deployment/devops-api -n $(aksNamespaceDev) --timeout=180s
                 
                 echo "✅ Desarrollo desplegado con configuración optimizada"
+                kubectl get pods -n $(aksNamespaceDev)
 
-# STAGE 4: DEPLOY TO PRODUCTION
+# STAGE 3: DEPLOY TO PRODUCTION
 - stage: Deploy_Prod
   displayName: 'Deploy to Production'
-  dependsOn: Test
+  dependsOn: Build_Test  # ← CORREGIDO: Cambiado de 'Test' a 'Build_Test'
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
   jobs:
   - deployment: Deploy_Production
@@ -173,6 +181,17 @@ stages:
         deploy:
           steps:
           - checkout: self
+          - download: current  # ← AGREGADO: Descargar artefactos
+            artifact: manifests
+
+          - task: Bash@3
+            displayName: 'Update Production Image Tag'
+            inputs:
+              targetType: 'inline'
+              script: |
+                # Actualizar tag en kustomization
+                sed -i "s|BUILD_TAG|$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/production/kustomization.yaml
+                echo "✅ Image tag actualizado a: $(Build.BuildId)"
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Production)'
@@ -186,10 +205,12 @@ stages:
                 
                 az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
                 
-                # Actualizar tag en kustomization
-                sed -i "s|\\$\\(Build.BuildId\\)|$(Build.BuildId)|g" manifests/production/kustomization.yaml
-                
                 # Usar Kustomize para producción
-                kubectl apply -k manifests/production/
+                kubectl apply -k $(Pipeline.Workspace)/manifests/production/
+                
+                # Verificar despliegue
+                kubectl rollout status deployment/devops-api -n $(aksNamespaceProd) --timeout=300s
                 
                 echo "✅ Producción desplegada con alta disponibilidad"
+                kubectl get pods -n $(aksNamespaceProd)
+                kubectl get hpa -n $(aksNamespaceProd) 2>/dev/null || echo "HPA no disponible"
