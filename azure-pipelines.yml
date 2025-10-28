@@ -144,16 +144,19 @@ stages:
           - download: current
             artifact: manifests
 
-          - task: AzureCLI@2
-            displayName: 'Verify Azure Connection'
+          - task: Bash@3
+            displayName: 'Verify Kustomize Structure'
             inputs:
-              azureSubscription: $(azureServiceConnection)
-              scriptType: 'bash'
-              scriptLocation: 'inlineScript'
-              inlineScript: |
-                echo "=== VERIFICANDO CONEXIÓN AZURE ==="
-                az account show
-                echo "✅ Conexión a Azure exitosa"
+              targetType: 'inline'
+              script: |
+                echo "=== VERIFICANDO ESTRUCTURA KUSTOMIZE ==="
+                find $(Pipeline.Workspace)/manifests -name "*.yaml" -type f | sort
+                echo ""
+                echo "=== CONTENIDO DE BASE/KUSTOMIZATION.YAML ==="
+                cat $(Pipeline.Workspace)/manifests/base/kustomization.yaml
+                echo ""
+                echo "=== CONTENIDO DE DEVELOPMENT/KUSTOMIZATION.YAML ==="
+                cat $(Pipeline.Workspace)/manifests/development/kustomization.yaml
 
           - task: AzureCLI@2
             displayName: 'Deploy to AKS (Development)'
@@ -163,49 +166,22 @@ stages:
               scriptLocation: 'inlineScript'
               inlineScript: |
                 set -e
-                echo "=== INICIANDO DESPLIEGUE EN DESARROLLO ==="
+                echo "=== DESPLIEGUE EN DESARROLLO ==="
                 
-                # Verificar que los manifiestos existen
-                echo "Verificando archivos de manifiesto..."
-                ls -la $(Pipeline.Workspace)/manifests/
-                ls -la $(Pipeline.Workspace)/manifests/development/
+                az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksClusterName) --overwrite-existing
                 
-                echo "=== OBTENIENDO CREDENCIALES AKS ==="
-                az aks get-credentials \
-                  --resource-group $(aksResourceGroup) \
-                  --name $(aksClusterName) \
-                  --overwrite-existing \
-                  --verbose
+                echo "=== APLICANDO KUSTOMIZE ==="
+                # Probar primero en modo dry-run
+                kubectl apply -k $(Pipeline.Workspace)/manifests/development/ --dry-run=client -o yaml
                 
-                echo "=== VERIFICANDO CONEXIÓN A KUBERNETES ==="
-                kubectl cluster-info
-                kubectl get nodes
-                
-                echo "=== APLICANDO CONFIGURACIÓN DE DESARROLLO ==="
-                # Aplicar con Kustomize
-                kubectl apply -k $(Pipeline.Workspace)/manifests/development/ --dry-run=client
+                # Aplicar realmente
                 kubectl apply -k $(Pipeline.Workspace)/manifests/development/
                 
                 echo "=== VERIFICANDO DESPLIEGUE ==="
-                # Esperar y verificar
-                sleep 30
-                kubectl get all -n $(aksNamespaceDev)
-                kubectl rollout status deployment/devops-api -n $(aksNamespaceDev) --timeout=180s
+                kubectl rollout status deployment/devops-api -n devops-app-dev --timeout=180s
+                kubectl get all -n devops-app-dev
                 
-                echo "🎉 ✅ DESARROLLO DESPLEGADO EXITOSAMENTE"
-                echo "📦 Namespace: $(aksNamespaceDev)"
-                echo "🐳 Imagen: $(acrName)/$(imageName):develop-latest"
-
-          - task: Bash@3
-            displayName: 'Final Verification'
-            inputs:
-              targetType: 'inline'
-              script: |
-                echo "=== VERIFICACIÓN FINAL ==="
-                echo "✅ Build: $(Build.BuildId)"
-                echo "✅ Rama: $(Build.SourceBranch)"
-                echo "✅ Entorno: Development"
-                echo "✅ Despliegue completado"
+                echo "✅ DESARROLLO DESPLEGADO EXITOSAMENTE"
 
 # STAGE 3: DEPLOY TO PRODUCTION
 - stage: Deploy_Prod
