@@ -1,6 +1,7 @@
-﻿# test-steps.yml - VERSIÓN CORREGIDA
+﻿# test-steps.yml - VERSIÓN COMPLETA CON SONARCLOUD
 steps:
 - checkout: self
+  fetchDepth: 0  # Necesario para SonarCloud
 
 - task: UseDotNet@2
   displayName: 'Use .NET 8.x'
@@ -14,8 +15,23 @@ steps:
     command: 'restore'
     projects: '$(solution)'
 
+# ANÁLISIS ESTÁTICO CON SONARCLOUD
+- task: SonarCloudPrepare@1
+  displayName: 'Prepare SonarCloud Analysis'
+  inputs:
+    SonarCloud: 'SonarChallenge'  # Debes crear este service connection en Azure DevOps
+    organization: 'geobasti222'  # Tu organización de SonarCloud
+    projectKey: 'geobasti222_Challenge'  # Usualmente: organización_repositorio
+    projectName: 'DevOps Challenge API'
+    projectVersion: '$(Build.BuildNumber)'
+    extraProperties: |
+      sonar.coverage.exclusions=**/Tests/**,**/Migrations/**,**/Program.cs
+      sonar.cs.vstest.reportsPaths=**/*.trx
+      sonar.cs.opencover.reportsPaths=**/coverage.opencover.xml
+      sonar.coverageReportPaths=$(Build.SourcesDirectory)/TestResults/**/coverage.cobertura.xml
+
 - task: DotNetCoreCLI@2
-  displayName: 'Build Solution'
+  displayName: 'Build Solution with SonarCloud'
   inputs:
     command: 'build'
     arguments: '--configuration $(buildConfiguration) --no-restore'
@@ -27,7 +43,17 @@ steps:
     command: 'test'
     projects: '$(testProject)'
     arguments: '--configuration $(buildConfiguration) --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory $(Build.SourcesDirectory)/TestResults'
-    publishTestResults: false  # ← IMPORTANTE: Desactivar publicación automática
+    publishTestResults: false
+
+- task: SonarCloudAnalyze@1
+  displayName: 'Run SonarCloud Analysis'
+  inputs:
+    pollingTimeoutSec: '300'
+
+- task: SonarCloudPublish@1
+  displayName: 'Publish SonarCloud Results'
+  inputs:
+    pollingTimeoutSec: '300'
 
 - task: PublishTestResults@2
   displayName: 'Publish Unit Test Results'
@@ -94,13 +120,13 @@ steps:
     mergeTestResults: false
   condition: succeededOrFailed()
 
-# Agregar después de PublishCodeCoverageResults
+# RESUMEN FINAL
 - task: Bash@3
-  displayName: 'Generate Coverage Summary'
+  displayName: 'Generate Test and Analysis Summary'
   inputs:
     targetType: 'inline'
     script: |
-      echo "=== 📊 GENERATING COVERAGE SUMMARY ==="
+      echo "=== 📊 GENERATING SUMMARY ==="
       
       # Buscar archivo de coverage
       COVERAGE_FILE=$(find $(Build.SourcesDirectory)/TestResults -name "coverage.cobertura.xml" -type f | head -1)
@@ -108,9 +134,9 @@ steps:
       if [ -f "$COVERAGE_FILE" ]; then
         echo "✅ Coverage file found: $COVERAGE_FILE"
         
-        # Extraer métricas básicas (simplificado)
-        LINE_RATE=$(grep -oP 'line-rate="\K[0-9.]+' $COVERAGE_FILE | head -1)
-        BRANCH_RATE=$(grep -oP 'branch-rate="\K[0-9.]+' $COVERAGE_FILE | head -1)
+        # Extraer métricas básicas
+        LINE_RATE=$(grep -oP 'line-rate="\K[0-9.]+' "$COVERAGE_FILE" | head -1)
+        BRANCH_RATE=$(grep -oP 'branch-rate="\K[0-9.]+' "$COVERAGE_FILE" | head -1)
         
         # Convertir a porcentaje
         LINE_COVERAGE=$(echo "scale=2; $LINE_RATE * 100" | bc)
@@ -129,14 +155,21 @@ steps:
       fi
 
 - task: CmdLine@2
-  displayName: 'Display Test Summary'
+  displayName: 'Display Complete Analysis Summary'
   inputs:
     script: |
       echo "=========================================="
-      echo "🎯 TEST EXECUTION SUMMARY"
+      echo "🎯 COMPLETE ANALYSIS SUMMARY"
       echo "=========================================="
       echo "✅ Unit Tests: Completed"
       echo "✅ API Tests: Completed" 
+      echo "✅ SonarCloud Analysis: Completed"
       echo "📊 Code Coverage: $(LINE_COVERAGE)% Lines, $(BRANCH_COVERAGE)% Branches"
-      echo "📁 Results Published to Pipeline Summary"
+      echo "🔍 Static Analysis: Results in SonarCloud"
+      echo "📁 All Results Published to Pipeline"
       echo "=========================================="
+      echo ""
+      echo "📋 Next Steps:"
+      echo "• Check SonarCloud for detailed code quality"
+      echo "• Review test results in Tests tab"
+      echo "• Verify code coverage metrics"
