@@ -1,0 +1,16 @@
+﻿apiVersion: v1
+kind: Service
+metadata:
+  name: devops-api-service
+  namespace: devops-app
+  labels:
+    app: devops-api
+spec:
+  type: LoadBalancer
+  selector:
+    app: devops-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP

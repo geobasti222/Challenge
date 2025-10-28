@@ -1,0 +1,222 @@
+﻿# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - master
+      - develop
+
+pr:
+  branches:
+    include:
+      - master
+      - develop
+
+variables:
+  - name: buildConfiguration
+    value: 'Release'
+  - name: vmImage
+    value: 'ubuntu-latest'
+  - name: solution
+    value: 'Challenge.sln'
+  - name: testProject
+    value: 'Tests/**/*.csproj'
+  
+  # Docker/ACR
+  - name: acrServiceConnection
+    value: 'challengeserviceconnection'
+  - name: acrName
+    value: 'challenge.azurecr.io'  # ⬅️ Agregar esta variable
+  - name: imageName
+    value: 'devops-api'
+  - name: dockerfilePath
+    value: 'Devops.Api/Dockerfile'
+  
+  # AKS Configuration
+  - name: aksServiceConnection
+    value: 'aksConnection'
+  - name: aksResourceGroup
+    value: 'Challenge'  # ⬅️ Actualizar con tu RG
+  - name: aksClusterName
+    value: 'akschalle'  # ⬅️ Actualizar con tu AKS
+  - name: aksNamespace
+    value: 'devops-app'
+
+stages:
+# STAGE 1: BUILD Y TEST
+- stage: Build_Test
+  displayName: 'Build and Test'
+  jobs:
+  - job: Build
+    displayName: 'Build and Test Application'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    # GESTIÓN DE DEPENDENCIAS
+    - task: UseDotNet@2
+      displayName: 'Use .NET 8.0'
+      inputs:
+        packageType: 'sdk'
+        version: '8.0.x'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore Dependencies'
+      inputs:
+        command: 'restore'
+        projects: $(solution)
+
+    # ANÁLISIS ESTÁTICO DE CÓDIGO
+    - task: DotNetCoreCLI@2
+      displayName: 'Install dotnet-format tool'
+      inputs:
+        command: 'custom'
+        custom: 'tool'
+        arguments: 'install --global dotnet-format'
+      condition: succeeded()
+
+    - task: CmdLine@2
+      displayName: 'Apply code formatting'
+      inputs:
+        script: 'dotnet format --verbosity minimal'
+      condition: succeeded()
+
+    # BUILD
+    - task: DotNetCoreCLI@2
+      displayName: 'Build Solution'
+      inputs:
+        command: 'build'
+        projects: $(solution)
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+
+    # PRUEBAS AUTOMATIZADAS
+    - task: DotNetCoreCLI@2
+      displayName: 'Run Unit Tests'
+      inputs:
+        command: 'test'
+        projects: $(testProject)
+        arguments: '--configuration $(buildConfiguration) --no-build --logger trx --collect:"XPlat Code Coverage"'
+        publishTestResults: true
+
+    # CONTAINERIZACIÓN
+    - task: Docker@2
+      displayName: 'Build and Push Docker Image'
+      inputs:
+        command: 'buildAndPush'
+        repository: $(imageName)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(acrServiceConnection)
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    # PUBLICAR MANIFIESTOS COMO ARTEFACTO
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Kubernetes Manifests'
+      inputs:
+        PathtoPublish: 'manifests'
+        ArtifactName: 'manifests'
+
+# STAGE 3: DESPLIEGUE PRODUCTION (AKS)
+- stage: Deploy_Prod
+  displayName: 'Deploy to AKS Production'
+  dependsOn: Build_Test
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  jobs:
+  - deployment: DeployAKS
+    displayName: 'Deploy to AKS'
+    pool:
+      vmImage: $(vmImage)
+    environment: 'Production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - download: current
+            artifact: manifests
+
+          - task: Kubernetes@1
+            displayName: 'Get AKS Credentials'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'use'
+              useClusterAdmin: true
+
+          # Reemplazar tag de imagen en los manifiestos
+          - task: Bash@3
+            displayName: 'Update Image Tag in Manifests'
+            inputs:
+              targetType: 'inline'
+              script: |
+                sed -i "s|challenge.azurecr.io/devops-api:latest|$(acrName)/$(imageName):$(Build.BuildId)|g" $(Pipeline.Workspace)/manifests/deployment.yaml
+                echo "Image tag updated to: $(acrName)/$(imageName):$(Build.BuildId)"
+
+          # Aplicar manifiestos en orden
+          - task: Kubernetes@1
+            displayName: 'Create Namespace'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'apply'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/namespace.yaml'
+
+          - task: Kubernetes@1
+            displayName: 'Deploy Application'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'apply'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/deployment.yaml'
+
+          - task: Kubernetes@1
+            displayName: 'Create Service'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              command: 'apply'
+              useConfigurationFile: true
+              configuration: '$(Pipeline.Workspace)/manifests/service.yaml'
+
+          # Verificaciones
+          - task: Kubernetes@1
+            displayName: 'Verify Deployment'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              namespace: $(aksNamespace)
+              command: 'rollout'
+              arguments: 'status deployment/devops-api'
+
+          - task: Kubernetes@1
+            displayName: 'Get Service External IP'
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureResourceGroup: $(aksResourceGroup)
+              kubernetesCluster: $(aksClusterName)
+              namespace: $(aksNamespace)
+              command: 'get'
+              arguments: 'service devops-api-service -o wide'
+
+          - task: Bash@3
+            displayName: 'Health Check'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "Deployment completed successfully!"
+                echo "Application deployed to AKS cluster: $(aksClusterName)"
+                echo "Namespace: $(aksNamespace)"
+                echo "Image: $(acrName)/$(imageName):$(Build.BuildId)"
