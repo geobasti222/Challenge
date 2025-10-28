@@ -1,0 +1,26 @@
+<policies>
+	<inbound>
+		<validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized">
+			<issuer-signing-keys>
+				<key>${jwt-secret}</key>
+			</issuer-signing-keys>
+			<audiences>
+				<audience>devops-api</audience>
+			</audiences>
+			<issuers>
+				<issuer>devops-api</issuer>
+			</issuers>
+		</validate-jwt>
+		<base />
+	</inbound>
+	<backend>
+		<set-backend-service base-url="@(context.Request.OriginalUrl.Host)" />
+		<base />
+	</backend>
+	<outbound>
+		<base />
+	</outbound>
+	<on-error>
+		<base />
+	</on-error>
+</policies>

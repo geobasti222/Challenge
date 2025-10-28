@@ -1,0 +1,7 @@
+environment       = "prod"
+app_name          = "devopsapi"
+deployment_target = "aks"
+docker_tag        = "latest"
+acr_name          = "challenge"
+acr_resource_group = "rg-challenge"
+location          = "eastus"

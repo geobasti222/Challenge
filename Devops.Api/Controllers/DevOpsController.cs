@@ -30,7 +30,7 @@ namespace Devops.Api.Controllers
 
             // Generar JWT único por transacción
             var jwt = _jwtService.GenerateToken();
-            Response.Headers.Add("X-JWT-KWY", jwt);
+            Response.Headers.Append("X-JWT-KWY", jwt);
 
             var response = new DevOpsResponse
             {
