@@ -1,35 +1,42 @@
-﻿# azure-pipelines-fix-backend.yml
+# create-storage-account-fixed.yml
 trigger: none
 pr: none
 
 pool:
   vmImage: 'ubuntu-latest'
 
+variables:
+  resourceGroupName: 'TerraformStateResourceGroup'
+  containerName: 'tfstate'
+
 steps:
 - task: AzureCLI@2
-  displayName: 'Create Storage Account Correctly'
+  displayName: 'Create Storage Account via Service Principal'
   inputs:
-    azureSubscription: 'MychallengeServiceConnection'  # Tu service connection que SÍ funciona
+    azureSubscription: 'MychallengeServiceConnection'  # Tu service connection existente
     scriptType: 'bash'
     scriptLocation: 'inlineScript'
     inlineScript: |
       set -e
       
-      echo "=== CREANDO STORAGE ACCOUNT ==="
+      echo "=== Verificando autenticación ==="
+      az account show
       
-      # El Resource Group YA existe, solo crear Storage Account
-      RG_NAME="TerraformStateResourceGroup"
-      CONTAINER_NAME="tfstate"
+      echo "=== Verificando permisos ==="
+      az role assignment list --assignee "8d2aaea2-169a-488a-8a5c-81aa28612a52" --output table
       
+      echo "=== Creando Storage Account ==="
       # Generar nombre único
       TIMESTAMP=$(date +%s)
       STORAGE_NAME="tfstate$TIMESTAMP"
-      echo "Storage Account name: $STORAGE_NAME"
+      echo "Nuevo Storage Account: $STORAGE_NAME"
       
-      # Crear Storage Account con autenticación explícita
-      echo "Creando Storage Account..."
+      # Crear Resource Group si no existe
+      az group create --name $(resourceGroupName) --location eastus --tags CreatedBy=AzureDevOps || echo "Resource Group ya existe"
+      
+      # Crear Storage Account
       az storage account create \
-        --resource-group $RG_NAME \
+        --resource-group $(resourceGroupName) \
         --name $STORAGE_NAME \
         --sku Standard_LRS \
         --encryption-services blob \
@@ -37,29 +44,28 @@ steps:
         --allow-blob-public-access false \
         --https-only true
       
-      # Esperar a que se propague
       echo "Esperando a que el Storage Account esté listo..."
       sleep 30
       
-      # Crear container con autenticación login
-      echo "Creando container..."
+      # Crear container
       az storage container create \
-        --name $CONTAINER_NAME \
+        --name $(containerName) \
         --account-name $STORAGE_NAME \
         --auth-mode login
       
       echo ""
-      echo "=== ✅ BACKEND CREADO EXITOSAMENTE ==="
-      echo "Resource Group: $RG_NAME"
-      echo "Storage Account: $STORAGE_NAME"
-      echo "Container: $CONTAINER_NAME"
+      echo "=== ✅ STORAGE ACCOUNT CREADO EXITOSAMENTE ==="
+      echo "Resource Group: $(resourceGroupName)"
+      echo "Storage Account: $STORAGE_NAME" 
+      echo "Container: $(containerName)"
       echo ""
       echo "=== 🔧 ACTUALIZA TU PIPELINE PRINCIPAL ==="
       echo "Variable: tfBackendStorage = $STORAGE_NAME"
 
 - task: Bash@3
-  displayName: 'Verificar creación'
+  displayName: 'Mostrar valores finales'
   inputs:
     targetType: 'inline'
     script: |
-      echo "Verificación completada - Ahora actualiza tu pipeline principal"
+      echo "Una vez que el pipeline termine, copia el nombre del Storage Account"
+      echo "y actualiza la variable 'tfBackendStorage' en tu pipeline principal"
