@@ -20,7 +20,7 @@ spec:
       - name: devops-api
         image: challenge.azurecr.io/devops-api:latest  # ← Se reemplazará en el pipeline
         ports:
-        - containerPort: 80
+        - containerPort: 8080
         env:
         - name: ASPNETCORE_ENVIRONMENT
           value: "Production"
@@ -34,12 +34,12 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 80
+            port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /health
-            port: 80
+            port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
