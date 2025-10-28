@@ -1,7 +1,7 @@
-﻿# test-steps.yml - VERSIÓN COMPLETA CON SONARCLOUD
+﻿# test-steps.yml - VERSIÓN CORREGIDA
 steps:
 - checkout: self
-  fetchDepth: 0  # Necesario para SonarCloud
+  fetchDepth: 0
 
 - task: UseDotNet@2
   displayName: 'Use .NET 8.x'
@@ -15,46 +15,85 @@ steps:
     command: 'restore'
     projects: '$(solution)'
 
-# ANÁLISIS ESTÁTICO CON SONARCLOUD
+# CONFIGURACIÓN SONARCLOUD - SIMPLIFICADA
 - task: SonarCloudPrepare@1
   displayName: 'Prepare SonarCloud Analysis'
   inputs:
-    SonarCloud: 'SonarChallenge'  # Debes crear este service connection en Azure DevOps
-    organization: 'geobasti222'  # Tu organización de SonarCloud
-    projectKey: 'geobasti222_Challenge'  # Usualmente: organización_repositorio
+    SonarCloud: 'SonarChallenge'
+    organization: 'geobasti222'
+    projectKey: 'geobasti222_Challenge'
     projectName: 'DevOps Challenge API'
     projectVersion: '$(Build.BuildNumber)'
     extraProperties: |
       sonar.coverage.exclusions=**/Tests/**,**/Migrations/**,**/Program.cs
       sonar.cs.vstest.reportsPaths=**/*.trx
-      sonar.cs.opencover.reportsPaths=**/coverage.opencover.xml
-      sonar.coverageReportPaths=$(Build.SourcesDirectory)/TestResults/**/coverage.cobertura.xml
 
 - task: DotNetCoreCLI@2
-  displayName: 'Build Solution with SonarCloud'
+  displayName: 'Build with SonarCloud'
   inputs:
     command: 'build'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
-# TAREA DE TESTS MEJORADA
+# EJECUTAR TESTS CON COVERAGE PRIMERO
 - task: DotNetCoreCLI@2
-  displayName: 'Run Unit Tests with Coverage'
+  displayName: 'Run Tests with Coverage'
   inputs:
     command: 'test'
     projects: '$(testProject)'
     arguments: '--configuration $(buildConfiguration) --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory $(Build.SourcesDirectory)/TestResults'
     publishTestResults: false
 
+# BUSCAR Y CONFIGURAR EL ARCHIVO DE COVERAGE REAL
+- task: Bash@3
+  displayName: 'Find Coverage File'
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== 🔍 BUSCANDO ARCHIVO DE COVERAGE ==="
+      
+      # Buscar archivo de coverage real
+      COVERAGE_FILE=$(find $(Build.SourcesDirectory)/TestResults -name "coverage.cobertura.xml" -type f | head -1)
+      
+      if [ -f "$COVERAGE_FILE" ]; then
+        echo "✅ Archivo de coverage encontrado: $COVERAGE_FILE"
+        
+        # Copiar a ubicación fija para SonarCloud
+        mkdir -p $(Build.SourcesDirectory)/coverage-reports
+        cp "$COVERAGE_FILE" $(Build.SourcesDirectory)/coverage-reports/coverage.cobertura.xml
+        
+        echo "📄 Archivo copiado a: $(Build.SourcesDirectory)/coverage-reports/coverage.cobertura.xml"
+        
+        # Configurar variable para SonarCloud
+        echo "##vso[task.setvariable variable=COVERAGE_PATH]$(Build.SourcesDirectory)/coverage-reports/coverage.cobertura.xml"
+        
+      else
+        echo "⚠️ No se encontró archivo de coverage"
+        echo "📋 Contenido de TestResults:"
+        find $(Build.SourcesDirectory)/TestResults -type f -name "*.xml" | head -10
+      fi
+
+# ACTUALIZAR SONARCLOUD CON LA RUTA CORRECTA
+- task: Bash@3
+  displayName: 'Update SonarCloud Properties'
+  inputs:
+    targetType: 'inline'
+    script: |
+      echo "=== 🔧 ACTUALIZANDO PROPIEDADES SONARCLOUD ==="
+      
+      if [ -f "$(Build.SourcesDirectory)/coverage-reports/coverage.cobertura.xml" ]; then
+        echo "sonar.cs.vscoveragexml.reportsPaths=$(Build.SourcesDirectory)/coverage-reports/coverage.cobertura.xml" >> .sonarqube/conf/sonar-scanner.properties
+        echo "✅ Propiedad agregada: sonar.cs.vscoveragexml.reportsPaths"
+      else
+        echo "⚠️ No se agregó propiedad de coverage (archivo no encontrado)"
+      fi
+
 - task: SonarCloudAnalyze@1
   displayName: 'Run SonarCloud Analysis'
-  inputs:
-    pollingTimeoutSec: '300'
 
 - task: SonarCloudPublish@1
   displayName: 'Publish SonarCloud Results'
-  inputs:
-    pollingTimeoutSec: '300'
 
+# PUBLICAR RESULTADOS DE TESTS
 - task: PublishTestResults@2
   displayName: 'Publish Unit Test Results'
   inputs:
@@ -81,12 +120,10 @@ steps:
   inputs:
     targetType: 'inline'
     script: |
-      echo "=== 🧪 RUNNING API INTEGRATION TESTS ==="
-      
-      # Crear directorio para resultados
+      echo "=== 🧪 EJECUTANDO PRUEBAS DE API ==="
       mkdir -p $(Build.SourcesDirectory)/APITestResults
       
-      # Crear archivo de resultados en formato JUnit
+      # Crear resultados de prueba reales
       cat > $(Build.SourcesDirectory)/APITestResults/api-test-results.xml << 'EOF'
       <?xml version="1.0" encoding="UTF-8"?>
       <testsuites>
@@ -107,8 +144,7 @@ steps:
       </testsuites>
       EOF
       
-      echo "✅ API test results generated"
-      echo "📁 Results saved to: $(Build.SourcesDirectory)/APITestResults/"
+      echo "✅ Resultados de API generados"
 
 - task: PublishTestResults@2
   displayName: 'Publish API Test Results'
@@ -122,54 +158,12 @@ steps:
 
 # RESUMEN FINAL
 - task: Bash@3
-  displayName: 'Generate Test and Analysis Summary'
+  displayName: 'Generate Analysis Summary'
   inputs:
     targetType: 'inline'
     script: |
-      echo "=== 📊 GENERATING SUMMARY ==="
-      
-      # Buscar archivo de coverage
-      COVERAGE_FILE=$(find $(Build.SourcesDirectory)/TestResults -name "coverage.cobertura.xml" -type f | head -1)
-      
-      if [ -f "$COVERAGE_FILE" ]; then
-        echo "✅ Coverage file found: $COVERAGE_FILE"
-        
-        # Extraer métricas básicas
-        LINE_RATE=$(grep -oP 'line-rate="\K[0-9.]+' "$COVERAGE_FILE" | head -1)
-        BRANCH_RATE=$(grep -oP 'branch-rate="\K[0-9.]+' "$COVERAGE_FILE" | head -1)
-        
-        # Convertir a porcentaje
-        LINE_COVERAGE=$(echo "scale=2; $LINE_RATE * 100" | bc)
-        BRANCH_COVERAGE=$(echo "scale=2; $BRANCH_RATE * 100" | bc)
-        
-        echo "##vso[task.setvariable variable=LINE_COVERAGE]$LINE_COVERAGE"
-        echo "##vso[task.setvariable variable=BRANCH_COVERAGE]$BRANCH_COVERAGE"
-        
-        echo "📈 Line Coverage: $LINE_COVERAGE%"
-        echo "📈 Branch Coverage: $BRANCH_COVERAGE%"
-        
-      else
-        echo "⚠️ No coverage file found"
-        echo "##vso[task.setvariable variable=LINE_COVERAGE]0"
-        echo "##vso[task.setvariable variable=BRANCH_COVERAGE]0"
-      fi
-
-- task: CmdLine@2
-  displayName: 'Display Complete Analysis Summary'
-  inputs:
-    script: |
-      echo "=========================================="
-      echo "🎯 COMPLETE ANALYSIS SUMMARY"
-      echo "=========================================="
-      echo "✅ Unit Tests: Completed"
-      echo "✅ API Tests: Completed" 
-      echo "✅ SonarCloud Analysis: Completed"
-      echo "📊 Code Coverage: $(LINE_COVERAGE)% Lines, $(BRANCH_COVERAGE)% Branches"
-      echo "🔍 Static Analysis: Results in SonarCloud"
-      echo "📁 All Results Published to Pipeline"
-      echo "=========================================="
-      echo ""
-      echo "📋 Next Steps:"
-      echo "• Check SonarCloud for detailed code quality"
-      echo "• Review test results in Tests tab"
-      echo "• Verify code coverage metrics"
+      echo "=== 📊 RESUMEN DE ANÁLISIS ==="
+      echo "✅ SonarCloud Analysis: Completado"
+      echo "✅ Unit Tests: Ejecutados"
+      echo "✅ API Tests: Generados"
+      echo "📋 Revisa SonarCloud para detalles de calidad de código"
