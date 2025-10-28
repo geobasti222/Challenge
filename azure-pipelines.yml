@@ -20,7 +20,7 @@ variables:
   
   # --- Variables del Proyecto .NET ---
   solution: 'Challenge.sln'
-  testProject: 'Tests/DevOps.Api.Tests/DevOps.Api.Tests.csproj' # Ajusta si el nombre es diferente
+  testProject: 'Tests/Devops.Api.Tests/Devops.Api.Tests.csproj' # Ajusta si el nombre es diferente
   
   # --- Variables de Docker / ACR ---
   # DEBES crear una conexión de servicio 'MyAcrServiceConnection' en Azure DevOps
