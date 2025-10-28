@@ -3,10 +3,10 @@ steps:
 - checkout: self
 
 - task: UseDotNet@2
-  displayName: 'Use .NET 6.x'
+  displayName: 'Use .NET 8.x'
   inputs:
     packageType: 'sdk'
-    version: '6.x'
+    version: '8.x'
 
 - task: DotNetCoreCLI@2
   displayName: 'Restore NuGet Packages'
