@@ -14,9 +14,12 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY . .
-RUN dotnet restore "Devops.Api/Devops.Api.csproj"
+
+RUN ls
+
+RUN dotnet restore "Devops.Api.csproj"
 COPY . .
-WORKDIR "/src/Devops.Api"
+WORKDIR "/src"
 RUN dotnet build "Devops.Api.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 # This stage is used to publish the service project to be copied to the final stage
