@@ -25,19 +25,19 @@ variables:
   - name: acrServiceConnection
     value: 'challengeserviceconnection'
   - name: acrName
-    value: 'challenge.azurecr.io'  # ⬅️ Agregar esta variable
+    value: 'challenge.azurecr.io'
   - name: imageName
     value: 'devops-api'
   - name: dockerfilePath
     value: 'Devops.Api/Dockerfile'
   
-  # AKS Configuration
-  - name: aksServiceConnection
-    value: 'aksConnection'
+  # AKS Configuration - CAMBIAR a Azure Resource Manager Service Connection
+  - name: azureServiceConnection
+    value: 'MychallengeServiceConnection'  # ← USAR ESTA (tipo AzureRM)
   - name: aksResourceGroup
-    value: 'Challenge'  # ⬅️ Actualizar con tu RG
+    value: 'Challenge'
   - name: aksClusterName
-    value: 'akschalle'  # ⬅️ Actualizar con tu AKS
+    value: 'akschalle'
   - name: aksNamespace
     value: 'devops-app'
 
@@ -120,7 +120,7 @@ stages:
 - stage: Deploy_Prod
   displayName: 'Deploy to AKS Production'
   dependsOn: Build_Test
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))  # ← Cambiar a 'master'
   jobs:
   - deployment: DeployAKS
     displayName: 'Deploy to AKS'
@@ -139,7 +139,7 @@ stages:
             displayName: 'Get AKS Credentials'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               command: 'use'
@@ -159,7 +159,7 @@ stages:
             displayName: 'Create Namespace'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               command: 'apply'
@@ -170,7 +170,7 @@ stages:
             displayName: 'Deploy Application'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               command: 'apply'
@@ -181,7 +181,7 @@ stages:
             displayName: 'Create Service'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               command: 'apply'
@@ -193,7 +193,7 @@ stages:
             displayName: 'Verify Deployment'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               namespace: $(aksNamespace)
@@ -204,7 +204,7 @@ stages:
             displayName: 'Get Service External IP'
             inputs:
               connectionType: 'Azure Resource Manager'
-              azureSubscriptionEndpoint: $(aksServiceConnection)
+              azureSubscriptionEndpoint: $(azureServiceConnection)  # ← CAMBIAR AQUÍ
               azureResourceGroup: $(aksResourceGroup)
               kubernetesCluster: $(aksClusterName)
               namespace: $(aksNamespace)
